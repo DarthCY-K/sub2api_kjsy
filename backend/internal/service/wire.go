@@ -966,6 +966,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(ChannelCacheInvalidator), new(*ChannelService)),
 	NewModelPricingResolver,
 	NewModelPlazaService,
+	NewModelLeaderboardService, // DarthCY: 模型调用量排行榜
 	NewContentModerationService,
 	NewAffiliateService,
 	ProvidePaymentConfigService,

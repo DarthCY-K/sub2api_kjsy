@@ -40,6 +40,11 @@ func RegisterUserRoutes(
 			user.GET("/api-keys/:id/usage/daily", panelRateLimiter.Heavy(), h.Usage.GetMyAPIKeyDailyUsage)
 			user.GET("/platform-quotas", h.User.GetMyPlatformQuotas)
 
+			// 模型调用量排行榜（DarthCY 定制）：全站聚合，登录可见；费用字段仅管理员
+			if h.ModelLeaderboard != nil {
+				authenticated.GET("/model-leaderboard", panelRateLimiter.Heavy(), h.ModelLeaderboard.Get)
+			}
+
 			// 通知邮箱管理
 			notifyEmail := user.Group("/notify-email")
 			{
