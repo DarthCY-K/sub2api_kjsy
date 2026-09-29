@@ -429,6 +429,7 @@ function formatMs(v: number) {
 }
 function formatGrowth(g: number | null | undefined) {
   if (g === null || g === undefined || !isFinite(g)) return '-'
+  if (g > 9.99) return '>+999%'
   const sign = g > 0 ? '+' : ''
   return `${sign}${(g * 100).toFixed(1)}%`
 }
