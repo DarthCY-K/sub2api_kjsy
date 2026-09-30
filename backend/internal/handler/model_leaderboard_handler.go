@@ -22,7 +22,7 @@ func NewModelLeaderboardHandler(svc *service.ModelLeaderboardService) *ModelLead
 	return &ModelLeaderboardHandler{svc: svc}
 }
 
-// Get GET /api/v1/model-leaderboard?source=requested|upstream&month=YYYY-MM&metric=requests|tokens
+// Get GET /api/v1/model-leaderboard?source=requested|upstream&month=YYYY-MM&metric=requests|tokens&vendor=claude|...
 func (h *ModelLeaderboardHandler) Get(c *gin.Context) {
 	source := strings.TrimSpace(c.Query("source"))
 	switch source {
@@ -31,8 +31,12 @@ func (h *ModelLeaderboardHandler) Get(c *gin.Context) {
 		response.BadRequest(c, "invalid source, want requested|upstream")
 		return
 	}
-	month := strings.TrimSpace(c.Query("month"))
 	metric, err := service.ParseLeaderboardMetric(strings.TrimSpace(c.Query("metric")))
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	vendor, err := service.ParseLeaderboardVendor(strings.TrimSpace(c.Query("vendor")))
 	if err != nil {
 		response.BadRequest(c, err.Error())
 		return
@@ -41,7 +45,13 @@ func (h *ModelLeaderboardHandler) Get(c *gin.Context) {
 	role, _ := middleware.GetUserRoleFromContext(c)
 	isAdmin := role == service.RoleAdmin
 
-	data, err := h.svc.Get(c.Request.Context(), source, month, metric, isAdmin)
+	query := service.LeaderboardQuery{
+		Source: source,
+		Month:  strings.TrimSpace(c.Query("month")),
+		Metric: metric,
+		Vendor: vendor,
+	}
+	data, err := h.svc.Get(c.Request.Context(), query, isAdmin)
 	if err != nil {
 		if strings.HasPrefix(err.Error(), "invalid month") {
 			response.BadRequest(c, err.Error())

@@ -18,7 +18,6 @@ type fakeLeaderboardRepo struct {
 	calls     map[string]int
 	boundary  time.Time // 当月月初：end == boundary 且 start 很早 = 历史快照查询
 	stats     map[string][]LeaderboardModelStat
-	users     map[string]map[string]int64
 	pairs     map[string][]LeaderboardModelUser
 	daily     map[string][]LeaderboardBucketPoint
 	histGate  chan struct{} // 非 nil 时历史 stats 查询阻塞到 close
@@ -73,12 +72,6 @@ func (f *fakeLeaderboardRepo) GetMonthModelStats(_ context.Context, start, end t
 	return f.stats[k], nil
 }
 
-func (f *fakeLeaderboardRepo) GetMonthActiveUsers(_ context.Context, start, end time.Time) (map[string]int64, error) {
-	k := f.kind(start, end)
-	f.hit("users:" + k)
-	return f.users[k], nil
-}
-
 func (f *fakeLeaderboardRepo) GetModelUserPairs(_ context.Context, start, end time.Time, _ string) ([]LeaderboardModelUser, error) {
 	k := f.kind(start, end)
 	f.hit("pairs:" + k)
@@ -95,11 +88,11 @@ func lbTestTime(month, day int) time.Time {
 	return time.Date(2026, time.Month(month), day, 12, 0, 0, 0, timezone.Location())
 }
 
-func pairsOf(m map[string][]int64) []LeaderboardModelUser {
+func pairsOf(month string, m map[string][]int64) []LeaderboardModelUser {
 	var out []LeaderboardModelUser
 	for model, ids := range m {
 		for _, id := range ids {
-			out = append(out, LeaderboardModelUser{Model: model, UserID: id})
+			out = append(out, LeaderboardModelUser{Month: month, Model: model, UserID: id})
 		}
 	}
 	return out
@@ -128,13 +121,13 @@ func newLeaderboardFixture(t *testing.T) (*fakeLeaderboardRepo, *ModelLeaderboar
 				{Month: "2026-08", Model: "a", Requests: 100, TotalTokens: 1},
 			},
 		},
-		users: map[string]map[string]int64{
-			"hist": {"2026-07": 3, "2026-08": 2},
-			"prev": {"2026-08": 2},
-		},
+		// 月活：7 月 {1,2,3}=3，8 月 {1,3}=2，上月同期 {1,3}=2；历史 a={1,2}、b={1,3}
 		pairs: map[string][]LeaderboardModelUser{
-			"hist":    pairsOf(map[string][]int64{"a": {1, 2}, "b": {1, 3}}),
-			"2026-09": pairsOf(map[string][]int64{"a": {1, 4}, "b": {3}, "new": {5}}),
+			"hist": append(
+				pairsOf("2026-07", map[string][]int64{"a": {2}, "b": {1, 3}}),
+				pairsOf("2026-08", map[string][]int64{"a": {1}, "b": {1, 3}})...),
+			"2026-09": pairsOf("2026-09", map[string][]int64{"a": {1, 4}, "b": {3}, "new": {5}}),
+			"prev":    pairsOf("2026-08", map[string][]int64{"a": {3}, "b": {1}}),
 		},
 		daily: map[string][]LeaderboardBucketPoint{
 			"2026-09": {{Bucket: "2026-09-01", Model: "a", Requests: 7}, {Bucket: "2026-09-15", Model: "b", Requests: 3}},
@@ -155,7 +148,7 @@ func newLeaderboardFixture(t *testing.T) (*fakeLeaderboardRepo, *ModelLeaderboar
 
 func TestModelLeaderboard_CurrentMonth(t *testing.T) {
 	_, svc, _ := newLeaderboardFixture(t)
-	resp, err := svc.Get(context.Background(), "", "", "", true)
+	resp, err := svc.Get(context.Background(), LeaderboardQuery{}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +189,7 @@ func TestModelLeaderboard_CurrentMonth(t *testing.T) {
 
 func TestModelLeaderboard_AllTimeMergesHistoryAndLive(t *testing.T) {
 	_, svc, _ := newLeaderboardFixture(t)
-	resp, err := svc.Get(context.Background(), "", "", "", true)
+	resp, err := svc.Get(context.Background(), LeaderboardQuery{}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,13 +231,13 @@ func TestModelLeaderboard_AllTimeMergesHistoryAndLive(t *testing.T) {
 func TestModelLeaderboard_CacheLayers(t *testing.T) {
 	repo, svc, now := newLeaderboardFixture(t)
 	ctx := context.Background()
-	if _, err := svc.Get(ctx, "", "", "", true); err != nil {
+	if _, err := svc.Get(ctx, LeaderboardQuery{}, true); err != nil {
 		t.Fatal(err)
 	}
 	calls := repo.total()
 
 	// 60s 内：任意月份/身份都不再查库；非管理员费用被抹掉
-	user, err := svc.Get(ctx, "requested", "", "", false)
+	user, err := svc.Get(ctx, LeaderboardQuery{Source: "requested"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,25 +247,25 @@ func TestModelLeaderboard_CacheLayers(t *testing.T) {
 	if user.CostVisible || user.Monthly.Summary.Cost != nil || user.Monthly.Prev.Cost != nil || user.Monthly.Ranking[0].Cost != nil || user.AllTime.Ranking[0].ActualCost != nil || user.MonthRows[0].Cost != nil {
 		t.Fatalf("cost not redacted for non-admin")
 	}
-	if again, _ := svc.Get(ctx, "", "", "", true); again.Monthly.Ranking[0].Cost == nil {
+	if again, _ := svc.Get(ctx, LeaderboardQuery{}, true); again.Monthly.Ranking[0].Cost == nil {
 		t.Fatalf("redaction leaked into admin response")
 	}
 
 	// 实时层过期：只重查当月，不重算历史快照
 	*now = now.Add(61 * time.Second)
-	if _, err := svc.Get(ctx, "", "", "", true); err != nil {
+	if _, err := svc.Get(ctx, LeaderboardQuery{}, true); err != nil {
 		t.Fatal(err)
 	}
 	if repo.count("stats:2026-09") != 2 || repo.count("pairs:2026-09") != 2 {
 		t.Fatalf("live layer not refreshed: %v", repo.calls)
 	}
-	if repo.count("stats:hist") != 1 || repo.count("pairs:hist") != 1 || repo.count("users:hist") != 1 {
+	if repo.count("stats:hist") != 1 || repo.count("pairs:hist") != 1 {
 		t.Fatalf("history should stay cached: %v", repo.calls)
 	}
 
 	// 历史快照过期（1h）：重建一次
 	*now = now.Add(time.Hour)
-	if _, err := svc.Get(ctx, "", "", "", true); err != nil {
+	if _, err := svc.Get(ctx, LeaderboardQuery{}, true); err != nil {
 		t.Fatal(err)
 	}
 	if repo.count("stats:hist") != 2 {
@@ -282,7 +275,7 @@ func TestModelLeaderboard_CacheLayers(t *testing.T) {
 	// 跨月：边界变化，历史快照立即重建
 	*now = time.Date(2026, 10, 1, 0, 0, 30, 0, timezone.Location())
 	repo.boundary = time.Date(2026, 10, 1, 0, 0, 0, 0, timezone.Location())
-	resp, err := svc.Get(ctx, "", "", "", true)
+	resp, err := svc.Get(ctx, LeaderboardQuery{}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +287,7 @@ func TestModelLeaderboard_CacheLayers(t *testing.T) {
 func TestModelLeaderboard_ClosedMonthView(t *testing.T) {
 	repo, svc, _ := newLeaderboardFixture(t)
 	ctx := context.Background()
-	resp, err := svc.Get(ctx, "", "2026-08", "", true)
+	resp, err := svc.Get(ctx, LeaderboardQuery{Month: "2026-08"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +310,7 @@ func TestModelLeaderboard_ClosedMonthView(t *testing.T) {
 		t.Fatalf("all-time should have no comparison for closed month view")
 	}
 	// 已结束月份的日趋势只查一次
-	if _, err := svc.Get(ctx, "", "2026-08", "", false); err != nil {
+	if _, err := svc.Get(ctx, LeaderboardQuery{Month: "2026-08"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if repo.count("daily:2026-08") != 1 {
@@ -334,7 +327,7 @@ func TestModelLeaderboard_ConcurrentColdStartSingleFlight(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := svc.Get(context.Background(), "", "", "", i%2 == 0); err != nil {
+			if _, err := svc.Get(context.Background(), LeaderboardQuery{}, i%2 == 0); err != nil {
 				errs <- err
 			}
 		}()
@@ -358,7 +351,7 @@ func TestModelLeaderboard_EmptyDatabaseHasNoNullArrays(t *testing.T) {
 	repo := &fakeLeaderboardRepo{boundary: time.Date(2026, 9, 1, 0, 0, 0, 0, timezone.Location())}
 	svc := NewModelLeaderboardService(repo)
 	svc.now = func() time.Time { return lbTestTime(9, 15) }
-	resp, err := svc.Get(context.Background(), "", "", "", false)
+	resp, err := svc.Get(context.Background(), LeaderboardQuery{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +373,7 @@ func TestModelLeaderboard_RolloverDoesNotReuseStaleBuild(t *testing.T) {
 
 	oldDone := make(chan error, 1)
 	go func() {
-		_, err := svc.Get(ctx, "", "", "", true)
+		_, err := svc.Get(ctx, LeaderboardQuery{}, true)
 		oldDone <- err
 	}()
 	time.Sleep(30 * time.Millisecond) // 旧月份构建阻塞在历史查询
@@ -388,7 +381,7 @@ func TestModelLeaderboard_RolloverDoesNotReuseStaleBuild(t *testing.T) {
 	*now = time.Date(2026, 10, 1, 0, 0, 5, 0, timezone.Location())
 	newDone := make(chan *ModelLeaderboardResponse, 1)
 	go func() {
-		resp, _ := svc.Get(ctx, "", "", "", true)
+		resp, _ := svc.Get(ctx, LeaderboardQuery{}, true)
 		newDone <- resp
 	}()
 	time.Sleep(30 * time.Millisecond)
@@ -421,12 +414,12 @@ func TestModelLeaderboard_TokensMetric(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	byReq, err := svc.Get(ctx, "", "", "", true)
+	byReq, err := svc.Get(ctx, LeaderboardQuery{}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	calls := repo.total()
-	resp, err := svc.Get(ctx, "", "", LeaderboardMetricTokens, true)
+	resp, err := svc.Get(ctx, LeaderboardQuery{Metric: LeaderboardMetricTokens}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,7 +459,7 @@ func TestModelLeaderboard_TokensMetric(t *testing.T) {
 		t.Fatalf("month row request top wrong: %+v", mr)
 	}
 
-	if _, err := svc.Get(ctx, "", "", "cost", true); err == nil {
+	if _, err := svc.Get(ctx, LeaderboardQuery{Metric: "cost"}, true); err == nil {
 		t.Fatal("expected invalid metric error")
 	}
 }

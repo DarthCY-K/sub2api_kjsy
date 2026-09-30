@@ -17,9 +17,7 @@ import (
 type ModelLeaderboardRepository interface {
 	// GetMonthModelStats 按 自然月 × 模型 聚合；Users 为该月该模型的去重用户数。
 	GetMonthModelStats(ctx context.Context, start, end time.Time, source string) ([]LeaderboardModelStat, error)
-	// GetMonthActiveUsers 每个自然月的去重活跃用户数（与模型口径无关）。
-	GetMonthActiveUsers(ctx context.Context, start, end time.Time) (map[string]int64, error)
-	// GetModelUserPairs 去重的 (模型, 用户) 对，用于跨区间精确合并去重用户数。
+	// GetModelUserPairs 去重的 (自然月, 模型, 用户)，用于按月/按供应商/跨区间精确计算去重用户数。
 	GetModelUserPairs(ctx context.Context, start, end time.Time, source string) ([]LeaderboardModelUser, error)
 	// GetDailyModelUsage 按 自然日 × 模型 聚合。
 	GetDailyModelUsage(ctx context.Context, start, end time.Time, source string) ([]LeaderboardBucketPoint, error)
@@ -49,6 +47,7 @@ type LeaderboardModelStat struct {
 }
 
 type LeaderboardModelUser struct {
+	Month  string // YYYY-MM
 	Model  string
 	UserID int64
 }
@@ -141,7 +140,9 @@ type LeaderboardPeriod struct {
 
 type ModelLeaderboardResponse struct {
 	Source      string                `json:"source"`
-	Metric      string                `json:"metric"` // 排名口径：requests | tokens
+	Metric      string                `json:"metric"`  // 排名口径：requests | tokens
+	Vendor      string                `json:"vendor"`  // 供应商筛选；空 = 全部
+	Vendors     []string              `json:"vendors"` // 有数据的供应商（按历史累计 metric 降序，other 置底），供筛选
 	Timezone    string                `json:"timezone"`
 	GeneratedAt string                `json:"generated_at"`
 	Month       string                `json:"month"`
@@ -180,14 +181,14 @@ func ParseLeaderboardMetric(metric string) (string, error) {
 // lbHistory 已结束月份（created_at < boundary）的聚合快照。
 // 这部分数据基本不再变化：按小时刷新，跨月（boundary 变化）立即重建。构建后只读。
 type lbHistory struct {
-	boundary   time.Time
-	builtAt    time.Time
-	months     []string // 升序
-	byMonth    map[string][]LeaderboardModelStat
-	monthUsers map[string]int64
-	modelUsers map[string]map[int64]struct{}
-	allUsers   map[int64]struct{}
-	merged     []LeaderboardModelStat // 全部已结束月份按模型合并，Users 为精确去重值
+	boundary    time.Time
+	builtAt     time.Time
+	months      []string // 升序
+	byMonth     map[string][]LeaderboardModelStat
+	monthUsers  map[string]map[string]int64 // 月 → 供应商（"" = 全部）→ 去重用户数
+	modelUsers  lbUserSets                  // 模型 → 去重用户
+	vendorUsers lbUserSets                  // 供应商（"" = 全部）→ 去重用户
+	merged      []LeaderboardModelStat      // 全部已结束月份按模型合并，Users 为精确去重值
 
 	dailyMu sync.Mutex
 	daily   map[string][]LeaderboardBucketPoint // 已结束月份的日趋势，按需加载
@@ -195,16 +196,44 @@ type lbHistory struct {
 
 // lbLive 当前自然月的实时聚合，构建后只读。
 type lbLive struct {
-	builtAt    time.Time
-	monthStart time.Time
-	month      string
-	merged     []LeaderboardModelStat // 当月按模型合并，Users 为精确去重值
-	users      map[int64]struct{}
-	modelUsers map[string]map[int64]struct{}
-	daily      []LeaderboardBucketPoint
-	prevEnd    time.Time
-	prev       []LeaderboardModelStat // 上月同期（月初 → 与当月相同的已过时长）
-	prevUsers  int64
+	builtAt     time.Time
+	monthStart  time.Time
+	month       string
+	merged      []LeaderboardModelStat // 当月按模型合并，Users 为精确去重值
+	modelUsers  lbUserSets
+	vendorUsers lbUserSets
+	daily       []LeaderboardBucketPoint
+	prevEnd     time.Time
+	prev        []LeaderboardModelStat // 上月同期（月初 → 与当月相同的已过时长）
+	prevUsers   map[string]int64       // 供应商（"" = 全部）→ 上月同期去重用户数
+}
+
+// lbUserSets key → 去重用户集合。
+type lbUserSets map[string]map[int64]struct{}
+
+func (u lbUserSets) add(key string, id int64) {
+	set := u[key]
+	if set == nil {
+		set = map[int64]struct{}{}
+		u[key] = set
+	}
+	set[id] = struct{}{}
+}
+
+func (u lbUserSets) sizes() map[string]int64 {
+	out := make(map[string]int64, len(u))
+	for k, set := range u {
+		out[k] = int64(len(set))
+	}
+	return out
+}
+
+// LeaderboardQuery 排行榜查询参数；各字段空串取默认。
+type LeaderboardQuery struct {
+	Source string // requested | upstream
+	Month  string // YYYY-MM；空 = 当月
+	Metric string // requests | tokens；空 = requests
+	Vendor string // 供应商筛选；空 = 全部
 }
 
 // ModelLeaderboardService 模型调用量排行榜。
@@ -245,16 +274,20 @@ func ParseLeaderboardMonth(month string, now time.Time) (time.Time, time.Time, e
 	return t, t.AddDate(0, 1, 0), nil
 }
 
-// Get 返回排行榜数据。month 为空取当月；metric 为排名口径（空 = requests）；includeCost 控制是否返回费用字段。
-// 缓存的是与口径无关的原始聚合，切换 metric 只影响内存中的排序与组装，不产生额外查询。
-func (s *ModelLeaderboardService) Get(ctx context.Context, source, month, metric string, includeCost bool) (*ModelLeaderboardResponse, error) {
-	source = usagestats.NormalizeModelSource(source)
-	metric, err := ParseLeaderboardMetric(metric)
+// Get 返回排行榜数据；includeCost 控制是否返回费用字段。
+// 缓存的是与口径/供应商无关的原始聚合，切换 metric 或 vendor 只影响内存中的筛选、排序与组装，不产生额外查询。
+func (s *ModelLeaderboardService) Get(ctx context.Context, q LeaderboardQuery, includeCost bool) (*ModelLeaderboardResponse, error) {
+	source := usagestats.NormalizeModelSource(q.Source)
+	metric, err := ParseLeaderboardMetric(q.Metric)
+	if err != nil {
+		return nil, err
+	}
+	vendor, err := ParseLeaderboardVendor(q.Vendor)
 	if err != nil {
 		return nil, err
 	}
 	now := s.now()
-	monthStart, monthEnd, err := ParseLeaderboardMonth(month, now)
+	monthStart, monthEnd, err := ParseLeaderboardMonth(q.Month, now)
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +311,7 @@ func (s *ModelLeaderboardService) Get(ctx context.Context, source, month, metric
 		}
 	}
 
-	resp := assembleLeaderboard(source, metric, monthStart, monthEnd, now, hist, live, daily)
+	resp := assembleLeaderboard(source, metric, vendor, monthStart, monthEnd, now, hist, live, daily)
 	if !includeCost {
 		redactLeaderboard(resp)
 	}
@@ -338,21 +371,16 @@ func (s *ModelLeaderboardService) buildHistory(ctx context.Context, source strin
 	if err != nil {
 		return nil, fmt.Errorf("history month stats: %w", err)
 	}
-	monthUsers, err := s.repo.GetMonthActiveUsers(ctx, farPast, boundary)
-	if err != nil {
-		return nil, fmt.Errorf("history month users: %w", err)
-	}
 	pairs, err := s.repo.GetModelUserPairs(ctx, farPast, boundary, source)
 	if err != nil {
 		return nil, fmt.Errorf("history model users: %w", err)
 	}
 
 	h := &lbHistory{
-		boundary:   boundary,
-		builtAt:    now,
-		byMonth:    map[string][]LeaderboardModelStat{},
-		monthUsers: monthUsers,
-		daily:      map[string][]LeaderboardBucketPoint{},
+		boundary: boundary,
+		builtAt:  now,
+		byMonth:  map[string][]LeaderboardModelStat{},
+		daily:    map[string][]LeaderboardBucketPoint{},
 	}
 	for _, st := range stats {
 		h.byMonth[st.Month] = append(h.byMonth[st.Month], st)
@@ -361,7 +389,23 @@ func (s *ModelLeaderboardService) buildHistory(ctx context.Context, source strin
 		h.months = append(h.months, m)
 	}
 	sort.Strings(h.months)
-	h.modelUsers, h.allUsers = lbUserSets(pairs)
+
+	vendorOf := lbVendorMemo()
+	h.modelUsers, h.vendorUsers = lbIndexUsers(pairs, vendorOf)
+	perMonth := map[string]lbUserSets{}
+	for _, p := range pairs {
+		sets := perMonth[p.Month]
+		if sets == nil {
+			sets = lbUserSets{}
+			perMonth[p.Month] = sets
+		}
+		sets.add("", p.UserID)
+		sets.add(vendorOf(p.Model), p.UserID)
+	}
+	h.monthUsers = make(map[string]map[string]int64, len(perMonth))
+	for m, sets := range perMonth {
+		h.monthUsers[m] = sets.sizes()
+	}
 	h.merged = lbMergeStats(stats)
 	for i := range h.merged {
 		h.merged[i].Users = int64(len(h.modelUsers[h.merged[i].Model]))
@@ -434,7 +478,7 @@ func (s *ModelLeaderboardService) buildLive(ctx context.Context, source string, 
 	if err != nil {
 		return nil, fmt.Errorf("prev period stats: %w", err)
 	}
-	prevUsers, err := s.repo.GetMonthActiveUsers(ctx, prevStart, prevEnd)
+	prevPairs, err := s.repo.GetModelUserPairs(ctx, prevStart, prevEnd, source)
 	if err != nil {
 		return nil, fmt.Errorf("prev period users: %w", err)
 	}
@@ -447,10 +491,10 @@ func (s *ModelLeaderboardService) buildLive(ctx context.Context, source string, 
 		prevEnd:    prevEnd,
 		prev:       lbMergeStats(prevStats),
 	}
-	for _, n := range prevUsers {
-		l.prevUsers += n
-	}
-	l.modelUsers, l.users = lbUserSets(pairs)
+	vendorOf := lbVendorMemo()
+	_, prevSets := lbIndexUsers(prevPairs, vendorOf)
+	l.prevUsers = prevSets.sizes()
+	l.modelUsers, l.vendorUsers = lbIndexUsers(pairs, vendorOf)
 	l.merged = lbMergeStats(stats)
 	for i := range l.merged {
 		l.merged[i].Month = l.month
@@ -496,16 +540,44 @@ func (s *ModelLeaderboardService) loadClosedDaily(ctx context.Context, source st
 
 // ---------- 组装 ----------
 
-func assembleLeaderboard(source, metric string, monthStart, monthEnd, now time.Time, h *lbHistory, l *lbLive, daily []LeaderboardBucketPoint) *ModelLeaderboardResponse {
+// assembleLeaderboard 组装响应。vendor 非空时所有榜单/趋势/汇总只统计该供应商的模型，去重用户按集合精确计算。
+func assembleLeaderboard(source, metric, vendor string, monthStart, monthEnd, now time.Time, h *lbHistory, l *lbLive, daily []LeaderboardBucketPoint) *ModelLeaderboardResponse {
 	loc := timezone.Location()
 	monthKey := monthStart.Format("2006-01")
 	isCurrent := monthStart.Equal(l.monthStart)
 
+	vendorOf := lbVendorMemo()
+	keep := func(model string) bool { return vendor == "" || vendorOf(model) == vendor }
+	filter := func(rows []LeaderboardModelStat) []LeaderboardModelStat {
+		if vendor == "" {
+			return rows
+		}
+		out := make([]LeaderboardModelStat, 0, len(rows))
+		for _, r := range rows {
+			if keep(r.Model) {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	filterPoints := func(points []LeaderboardBucketPoint) []LeaderboardBucketPoint {
+		if vendor == "" {
+			return points
+		}
+		out := make([]LeaderboardBucketPoint, 0, len(points))
+		for _, p := range points {
+			if keep(p.Model) {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+
 	monthData := func(key string) ([]LeaderboardModelStat, int64) {
 		if key == l.month {
-			return l.merged, int64(len(l.users))
+			return filter(l.merged), int64(len(l.vendorUsers[vendor]))
 		}
-		return h.byMonth[key], h.monthUsers[key]
+		return filter(h.byMonth[key]), h.monthUsers[key][vendor]
 	}
 
 	curRows, curUsers := monthData(monthKey)
@@ -513,7 +585,7 @@ func assembleLeaderboard(source, metric string, monthStart, monthEnd, now time.T
 	var prevUsers int64
 	periodEnd, labelEnd := monthEnd, monthEnd
 	if isCurrent {
-		prevRows, prevUsers = l.prev, l.prevUsers
+		prevRows, prevUsers = filter(l.prev), l.prevUsers[vendor]
 		periodEnd, labelEnd = now, now
 	} else {
 		prevRows, prevUsers = monthData(monthStart.AddDate(0, -1, 0).Format("2006-01"))
@@ -525,6 +597,8 @@ func assembleLeaderboard(source, metric string, monthStart, monthEnd, now time.T
 	resp := &ModelLeaderboardResponse{
 		Source:      source,
 		Metric:      metric,
+		Vendor:      vendor,
+		Vendors:     lbVendorsWithData(metric, vendorOf, h.merged, l.merged),
 		Timezone:    timezone.Name(),
 		GeneratedAt: now.In(loc).Format(time.RFC3339),
 		Month:       monthKey,
@@ -540,16 +614,17 @@ func assembleLeaderboard(source, metric string, monthStart, monthEnd, now time.T
 		Summary: lbSummarize(curRows, curUsers, loc),
 		Prev:    &prevSummary,
 		Ranking: buildLeaderboardRanking(curRows, prevRows, metric, loc),
-		Trend:   lbBuildDailySeries(daily, monthStart, labelEnd, metric, loc),
+		Trend:   lbBuildDailySeries(filterPoints(daily), monthStart, labelEnd, metric, loc),
 	}
 
 	// 历史累计 = 已结束月份快照 ⊕ 当月实时；去重用户用集合并集精确合并。
-	allRows := lbMergeStats(h.merged, l.merged)
+	histMerged := filter(h.merged)
+	allRows := lbMergeStats(histMerged, filter(l.merged))
 	for i := range allRows {
 		m := allRows[i].Model
 		allRows[i].Users = int64(len(h.modelUsers[m]) + lbCountMissing(l.modelUsers[m], h.modelUsers[m]))
 	}
-	allUsers := int64(len(h.allUsers) + lbCountMissing(l.users, h.allUsers))
+	allUsers := int64(len(h.vendorUsers[vendor]) + lbCountMissing(l.vendorUsers[vendor], h.vendorUsers[vendor]))
 
 	months := make([]string, 0, len(h.months)+1)
 	months = append(months, h.months...)
@@ -566,7 +641,7 @@ func assembleLeaderboard(source, metric string, monthStart, monthEnd, now time.T
 
 	var beforeMonth []LeaderboardModelStat // 当月视图：对比截至上月末的累计，标出本月带来的排名变化
 	if isCurrent {
-		beforeMonth = append([]LeaderboardModelStat{}, h.merged...)
+		beforeMonth = append([]LeaderboardModelStat{}, histMerged...)
 	}
 	allSummary := lbSummarize(allRows, allUsers, loc)
 	resp.AllTime = LeaderboardPeriod{
@@ -581,9 +656,12 @@ func assembleLeaderboard(source, metric string, monthStart, monthEnd, now time.T
 	resp.MonthRows = make([]LeaderboardMonthRow, 0, len(months))
 	resp.Months = make([]string, 0, len(months)+1)
 	for i := len(months) - 1; i >= 0; i-- { // 新月份在前
-		rows, users := monthData(months[i])
-		resp.MonthRows = append(resp.MonthRows, lbMonthRow(months[i], rows, users, metric))
 		resp.Months = append(resp.Months, months[i])
+		rows, users := monthData(months[i])
+		if len(rows) == 0 { // 仅供应商筛选时出现：该月没有此供应商的调用
+			continue
+		}
+		resp.MonthRows = append(resp.MonthRows, lbMonthRow(months[i], rows, users, metric))
 	}
 	if len(resp.Months) == 0 || resp.Months[0] != l.month {
 		resp.Months = append([]string{l.month}, resp.Months...)
@@ -591,19 +669,53 @@ func assembleLeaderboard(source, metric string, monthStart, monthEnd, now time.T
 	return resp
 }
 
-func lbUserSets(pairs []LeaderboardModelUser) (map[string]map[int64]struct{}, map[int64]struct{}) {
-	byModel := map[string]map[int64]struct{}{}
-	all := map[int64]struct{}{}
+// lbIndexUsers 按模型、按供应商（含 "" = 全部）分别建立去重用户集合（跨月合并）。
+func lbIndexUsers(pairs []LeaderboardModelUser, vendorOf func(string) string) (byModel, byVendor lbUserSets) {
+	byModel, byVendor = lbUserSets{}, lbUserSets{"": {}}
 	for _, p := range pairs {
-		set := byModel[p.Model]
-		if set == nil {
-			set = map[int64]struct{}{}
-			byModel[p.Model] = set
-		}
-		set[p.UserID] = struct{}{}
-		all[p.UserID] = struct{}{}
+		byModel.add(p.Model, p.UserID)
+		byVendor.add("", p.UserID)
+		byVendor.add(vendorOf(p.Model), p.UserID)
 	}
-	return byModel, all
+	return byModel, byVendor
+}
+
+// lbVendorMemo 返回带缓存的 LeaderboardVendorOf；仅在单次构建/组装内使用（模型名来自请求，不做全局缓存）。
+func lbVendorMemo() func(string) string {
+	memo := map[string]string{}
+	return func(model string) string {
+		v, ok := memo[model]
+		if !ok {
+			v = LeaderboardVendorOf(model)
+			memo[model] = v
+		}
+		return v
+	}
+}
+
+// lbVendorsWithData 历史累计中有调用的供应商，按 metric 降序（相同按 key），other 固定置底。
+func lbVendorsWithData(metric string, vendorOf func(string) string, groups ...[]LeaderboardModelStat) []string {
+	totals := map[string]int64{}
+	for _, g := range groups {
+		for _, r := range g {
+			v, _ := lbMetricKeys(r, metric)
+			totals[vendorOf(r.Model)] += v
+		}
+	}
+	out := make([]string, 0, len(totals))
+	for v := range totals {
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if (out[i] == LeaderboardVendorOther) != (out[j] == LeaderboardVendorOther) {
+			return out[j] == LeaderboardVendorOther
+		}
+		if totals[out[i]] != totals[out[j]] {
+			return totals[out[i]] > totals[out[j]]
+		}
+		return out[i] < out[j]
+	})
+	return out
 }
 
 // lbCountMissing 返回 a 中不在 b 里的元素个数，即 |a ∪ b| - |b|。

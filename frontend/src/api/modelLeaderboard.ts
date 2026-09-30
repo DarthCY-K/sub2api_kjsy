@@ -1,6 +1,6 @@
 /**
  * 模型调用量排行榜（DarthCY 定制）
- * GET /api/v1/model-leaderboard?source=requested|upstream&month=YYYY-MM&metric=requests|tokens
+ * GET /api/v1/model-leaderboard?source=requested|upstream&month=YYYY-MM&metric=requests|tokens&vendor=claude|...
  */
 import { apiClient } from './client'
 
@@ -78,6 +78,10 @@ export interface LeaderboardMonthRow {
 export interface ModelLeaderboardResponse {
   source: LeaderboardSource
   metric: LeaderboardMetric
+  /** 当前筛选的供应商，空串 = 全部 */
+  vendor: string
+  /** 有数据的供应商（按历史累计口径降序，other 恒在最后） */
+  vendors: string[]
   timezone: string
   generated_at: string
   month: string
@@ -92,7 +96,7 @@ export interface ModelLeaderboardResponse {
 export const LEADERBOARD_OTHER = '__other__'
 
 export async function getModelLeaderboard(
-  params: { source?: LeaderboardSource; month?: string; metric?: LeaderboardMetric } = {},
+  params: { source?: LeaderboardSource; month?: string; metric?: LeaderboardMetric; vendor?: string } = {},
   options?: { signal?: AbortSignal }
 ): Promise<ModelLeaderboardResponse> {
   const { data } = await apiClient.get<ModelLeaderboardResponse>('/model-leaderboard', {

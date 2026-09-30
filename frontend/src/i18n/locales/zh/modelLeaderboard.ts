@@ -10,6 +10,7 @@ export default {
     tabs: { monthly: '当月', allTime: '历史累计', months: '月度明细' },
     source: { label: '模型口径', requested: '请求模型', upstream: '上游模型' },
     month: '统计月份',
+    vendor: { label: '供应商', all: '全部供应商', other: '其他', hint: '按模型名称关键词归类，如 deepseek-* → DeepSeek、k3 → Moonshot、opus → Claude' },
     metric: { label: '统计口径', requests: '调用次数', tokens: 'Token 数', users: '活跃用户' },
     summary: {
       requests: '调用次数',

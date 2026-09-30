@@ -10,6 +10,7 @@ export default {
     tabs: { monthly: 'This month', allTime: 'All time', months: 'By month' },
     source: { label: 'Model', requested: 'Requested', upstream: 'Upstream' },
     month: 'Month',
+    vendor: { label: 'Vendor', all: 'All vendors', other: 'Other', hint: 'Grouped by model-name keywords, e.g. deepseek-* → DeepSeek, k3 → Moonshot, opus → Claude' },
     metric: { label: 'Rank by', requests: 'Requests', tokens: 'Tokens', users: 'Active users' },
     summary: {
       requests: 'Requests',

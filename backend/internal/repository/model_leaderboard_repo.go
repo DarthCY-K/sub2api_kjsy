@@ -78,37 +78,9 @@ func (r *modelLeaderboardRepository) GetMonthModelStats(ctx context.Context, sta
 	return out, rows.Err()
 }
 
-func (r *modelLeaderboardRepository) GetMonthActiveUsers(ctx context.Context, start, end time.Time) (out map[string]int64, err error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT TO_CHAR(created_at, 'YYYY-MM'), COUNT(DISTINCT user_id)
-		FROM usage_logs
-		WHERE created_at >= $1 AND created_at < $2
-		GROUP BY 1
-	`, start, end)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if cerr := rows.Close(); cerr != nil && err == nil {
-			err = cerr
-			out = nil
-		}
-	}()
-	out = make(map[string]int64, 16)
-	for rows.Next() {
-		var month string
-		var users int64
-		if err = rows.Scan(&month, &users); err != nil {
-			return nil, err
-		}
-		out[month] = users
-	}
-	return out, rows.Err()
-}
-
 func (r *modelLeaderboardRepository) GetModelUserPairs(ctx context.Context, start, end time.Time, source string) (out []service.LeaderboardModelUser, err error) {
 	query := fmt.Sprintf(`
-		SELECT DISTINCT %s AS model, user_id
+		SELECT DISTINCT TO_CHAR(created_at, 'YYYY-MM') AS month, %s AS model, user_id
 		FROM usage_logs
 		WHERE created_at >= $1 AND created_at < $2
 	`, resolveModelDimensionExpression(source))
@@ -125,7 +97,7 @@ func (r *modelLeaderboardRepository) GetModelUserPairs(ctx context.Context, star
 	out = make([]service.LeaderboardModelUser, 0, 256)
 	for rows.Next() {
 		var p service.LeaderboardModelUser
-		if err = rows.Scan(&p.Model, &p.UserID); err != nil {
+		if err = rows.Scan(&p.Month, &p.Model, &p.UserID); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

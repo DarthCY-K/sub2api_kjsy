@@ -48,6 +48,13 @@
             </div>
           </div>
 
+          <div class="flex items-center gap-2" :title="t('modelLeaderboard.vendor.hint')">
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('modelLeaderboard.vendor.label') }}:</span>
+            <div class="w-36">
+              <Select v-model="vendor" :options="vendorOptions" :aria-label="t('modelLeaderboard.vendor.label')" @change="load()" />
+            </div>
+          </div>
+
           <div v-if="activeTab === 'monthly' && monthOptions.length" class="flex items-center gap-2">
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('modelLeaderboard.month') }}:</span>
             <div class="w-32">
@@ -247,6 +254,9 @@
         </template>
 
         <!-- ============ 月度明细 ============ -->
+        <div v-else-if="!data.month_rows.length" class="card p-10 text-center text-sm text-gray-500 dark:text-dark-400">
+          {{ t('modelLeaderboard.empty') }}
+        </div>
         <template v-else>
           <div class="card p-4">
             <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">{{ t('modelLeaderboard.charts.trendMonthly', { metric: metricLabel }) }}</h3>
@@ -365,6 +375,24 @@ const activeTab = ref<Tab>(initialTab)
 const source = ref<LeaderboardSource>(route.query.source === 'upstream' ? 'upstream' : 'requested')
 const metric = ref<LeaderboardMetric>(route.query.metric === 'tokens' ? 'tokens' : 'requests')
 const month = ref<string>(typeof route.query.month === 'string' ? route.query.month : '')
+// 与后端 LeaderboardVendorOf 的分类键一致；品牌名不翻译
+const vendorNames: Record<string, string> = {
+  claude: 'Claude',
+  openai: 'OpenAI',
+  gemini: 'Gemini',
+  deepseek: 'DeepSeek',
+  moonshot: 'Moonshot',
+  zhipu: 'Zhipu GLM',
+  qwen: 'Qwen',
+  minimax: 'MiniMax',
+  xai: 'xAI',
+  doubao: 'Doubao',
+  mistral: 'Mistral',
+  meta: 'Meta',
+  other: ''
+}
+const queryVendor = typeof route.query.vendor === 'string' ? route.query.vendor : ''
+const vendor = ref<string>(Object.prototype.hasOwnProperty.call(vendorNames, queryVendor) ? queryVendor : '')
 const keyword = ref('')
 const sortKey = ref<string>('rank')
 const sortDesc = ref(false)
@@ -387,7 +415,7 @@ async function load() {
   loadFailed.value = false
   try {
     const resp = await getModelLeaderboard(
-      { source: source.value, month: month.value || undefined, metric: metric.value },
+      { source: source.value, month: month.value || undefined, metric: metric.value, vendor: vendor.value || undefined },
       { signal: controller.signal }
     )
     data.value = resp
@@ -420,18 +448,33 @@ function openMonth(m: string) {
   load()
 }
 
-watch([activeTab, source, metric, month], () => {
+watch([activeTab, source, metric, month, vendor], () => {
   const query: Record<string, string> = { ...(route.query as Record<string, string>) }
   query.tab = activeTab.value
   query.source = source.value
   query.metric = metric.value
   if (month.value) query.month = month.value
+  if (vendor.value) query.vendor = vendor.value
+  else delete query.vendor
   router.replace({ query }).catch(() => {})
 })
 
 onMounted(() => load())
 
 const monthOptions = computed(() => (data.value?.months ?? []).map((m) => ({ value: m, label: m })))
+
+function vendorLabel(v: string) {
+  return v === 'other' ? t('modelLeaderboard.vendor.other') : vendorNames[v] || v
+}
+// 仅列出有数据的供应商；当前选中项即使切换口径后无数据也保留，避免下拉框显示空白
+const vendorOptions = computed(() => {
+  const list = [...(data.value?.vendors ?? [])]
+  if (vendor.value && !list.includes(vendor.value)) list.push(vendor.value)
+  return [
+    { value: '', label: t('modelLeaderboard.vendor.all') },
+    ...list.map((v) => ({ value: v, label: vendorLabel(v) }))
+  ]
+})
 const period = computed(() => (activeTab.value === 'allTime' ? data.value?.all_time : data.value?.monthly))
 const ranking = computed(() => period.value?.ranking ?? [])
 const top3 = computed(() => ranking.value.slice(0, 3))
