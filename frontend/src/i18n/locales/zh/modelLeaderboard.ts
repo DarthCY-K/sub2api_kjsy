@@ -12,6 +12,14 @@ export default {
     month: '统计月份',
     rankBy: '排序',
     metric: { requests: '调用次数', tokens: 'Token 用量', users: '用户数' },
+    hero: {
+      currentChampion: '本月冠军',
+      monthChampion: '{month} 冠军',
+      allTimeChampion: '历史总冠军',
+      share: '占全站调用 {pct}',
+      lead: '领先第二名 {n} 次'
+    },
+    podium: { first: '冠军', second: '亚军', third: '季军' },
     summary: {
       requests: '调用次数',
       tokens: 'Token 总量',
@@ -34,7 +42,8 @@ export default {
       output: '输出',
       cacheCreate: '缓存写入',
       cacheRead: '缓存读取',
-      other: '其他'
+      other: '其他',
+      totalRequests: '总调用'
     },
     table: {
       title: '完整排行',
@@ -62,8 +71,9 @@ export default {
       title: '月度汇总',
       month: '月份',
       topModel: '当月第一',
-      topShare: '第一占比'
+      topShare: '第一占比',
+      peak: '峰值'
     },
-    footnote: '数据来自全站调用日志，每 60 秒刷新缓存；时区 {tz}。排名按调用次数，次数相同按 Token。'
+    footnote: '数据来自全站调用日志，当月数据每 60 秒刷新；时区 {tz}。排名按调用次数，次数相同按 Token。'
   }
 }

@@ -7,20 +7,28 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 )
 
-// ModelLeaderboardRepository 模型调用量排行榜聚合查询（只读）。
+// ModelLeaderboardRepository 模型调用量排行榜聚合查询（只读），区间均为 [start, end)。
 type ModelLeaderboardRepository interface {
-	GetModelRanking(ctx context.Context, start, end time.Time, source string) ([]LeaderboardModelRow, error)
-	GetTotals(ctx context.Context, start, end time.Time, source string) (*LeaderboardTotals, error)
-	GetBucketedModelUsage(ctx context.Context, start, end time.Time, source, bucket string) ([]LeaderboardBucketPoint, error)
-	GetMonthlyTotals(ctx context.Context, source string) ([]LeaderboardMonthTotal, error)
+	// GetMonthModelStats 按 自然月 × 模型 聚合；Users 为该月该模型的去重用户数。
+	GetMonthModelStats(ctx context.Context, start, end time.Time, source string) ([]LeaderboardModelStat, error)
+	// GetMonthActiveUsers 每个自然月的去重活跃用户数（与模型口径无关）。
+	GetMonthActiveUsers(ctx context.Context, start, end time.Time) (map[string]int64, error)
+	// GetModelUserPairs 去重的 (模型, 用户) 对，用于跨区间精确合并去重用户数。
+	GetModelUserPairs(ctx context.Context, start, end time.Time, source string) ([]LeaderboardModelUser, error)
+	// GetDailyModelUsage 按 自然日 × 模型 聚合。
+	GetDailyModelUsage(ctx context.Context, start, end time.Time, source string) ([]LeaderboardBucketPoint, error)
 }
 
-// LeaderboardModelRow 单模型在区间内的聚合。
-type LeaderboardModelRow struct {
+// LeaderboardModelStat 单模型在一个自然月（或合并后的任意区间）内的可加聚合。
+// 耗时类保存 和/计数 而非均值，才能跨月正确合并。
+type LeaderboardModelStat struct {
+	Month               string // YYYY-MM；跨月合并后为空
 	Model               string
 	Requests            int64
 	InputTokens         int64
@@ -30,27 +38,19 @@ type LeaderboardModelRow struct {
 	TotalTokens         int64
 	Users               int64
 	Images              int64
-	AvgDurationMs       float64
-	AvgFirstTokenMs     float64
+	DurationMsSum       int64
+	DurationCount       int64
+	FirstTokenMsSum     int64
+	FirstTokenCount     int64
 	Cost                float64
 	ActualCost          float64
 	FirstUsedAt         time.Time
 	LastUsedAt          time.Time
 }
 
-// LeaderboardTotals 区间总计。
-type LeaderboardTotals struct {
-	Requests        int64
-	TotalTokens     int64
-	InputTokens     int64
-	OutputTokens    int64
-	CacheReadTokens int64
-	Users           int64
-	Models          int64
-	Cost            float64
-	ActualCost      float64
-	FirstAt         *time.Time
-	LastAt          *time.Time
+type LeaderboardModelUser struct {
+	Model  string
+	UserID int64
 }
 
 // LeaderboardBucketPoint 时间桶 × 模型。
@@ -59,18 +59,6 @@ type LeaderboardBucketPoint struct {
 	Model       string
 	Requests    int64
 	TotalTokens int64
-	Users       int64
-}
-
-// LeaderboardMonthTotal 月度汇总。
-type LeaderboardMonthTotal struct {
-	Month       string
-	Requests    int64
-	TotalTokens int64
-	Users       int64
-	Models      int64
-	Cost        float64
-	ActualCost  float64
 }
 
 // ---------- 对外视图（handler 直接序列化） ----------
@@ -165,27 +153,64 @@ type ModelLeaderboardResponse struct {
 // ---------- service ----------
 
 const (
-	leaderboardCacheTTL  = 60 * time.Second
-	leaderboardTrendTopN = 8
-	leaderboardOther     = "__other__"
+	leaderboardLiveTTL    = 60 * time.Second
+	leaderboardHistoryTTL = time.Hour
+	leaderboardQueryLimit = 2 * time.Minute
+	leaderboardTrendTopN  = 8
+	leaderboardOther      = "__other__"
 )
 
-type leaderboardCacheEntry struct {
-	at   time.Time
-	resp *ModelLeaderboardResponse
+// lbHistory 已结束月份（created_at < boundary）的聚合快照。
+// 这部分数据基本不再变化：按小时刷新，跨月（boundary 变化）立即重建。构建后只读。
+type lbHistory struct {
+	boundary   time.Time
+	builtAt    time.Time
+	months     []string // 升序
+	byMonth    map[string][]LeaderboardModelStat
+	monthUsers map[string]int64
+	modelUsers map[string]map[int64]struct{}
+	allUsers   map[int64]struct{}
+	merged     []LeaderboardModelStat // 全部已结束月份按模型合并，Users 为精确去重值
+
+	dailyMu sync.Mutex
+	daily   map[string][]LeaderboardBucketPoint // 已结束月份的日趋势，按需加载
 }
 
-// ModelLeaderboardService 模型调用量排行榜。结果按 (source, month) 缓存 60s，
-// 管理员/普通用户共用同一份聚合，出参时再裁剪费用字段。
+// lbLive 当前自然月的实时聚合，构建后只读。
+type lbLive struct {
+	builtAt    time.Time
+	monthStart time.Time
+	month      string
+	merged     []LeaderboardModelStat // 当月按模型合并，Users 为精确去重值
+	users      map[int64]struct{}
+	modelUsers map[string]map[int64]struct{}
+	daily      []LeaderboardBucketPoint
+	prevEnd    time.Time
+	prev       []LeaderboardModelStat // 上月同期（月初 → 与当月相同的已过时长）
+	prevUsers  int64
+}
+
+// ModelLeaderboardService 模型调用量排行榜。
+//
+// 为避免每分钟全表扫描 usage_logs：已结束月份做成小时级快照，当月只查月初至今（走 created_at 索引），
+// 每次请求在内存中合并；同一数据块的并发刷新经 singleflight 合并为一次查询。
 type ModelLeaderboardService struct {
-	repo  ModelLeaderboardRepository
-	mu    sync.Mutex
-	cache map[string]leaderboardCacheEntry
-	now   func() time.Time
+	repo ModelLeaderboardRepository
+	now  func() time.Time
+	sf   singleflight.Group
+
+	mu      sync.Mutex
+	history map[string]*lbHistory
+	live    map[string]*lbLive
 }
 
 func NewModelLeaderboardService(repo ModelLeaderboardRepository) *ModelLeaderboardService {
-	return &ModelLeaderboardService{repo: repo, cache: map[string]leaderboardCacheEntry{}, now: timezone.Now}
+	return &ModelLeaderboardService{
+		repo:    repo,
+		now:     timezone.Now,
+		history: map[string]*lbHistory{},
+		live:    map[string]*lbLive{},
+	}
 }
 
 // ParseLeaderboardMonth 解析 YYYY-MM；空串 = 当月。返回配置时区下该月起止。
@@ -211,158 +236,432 @@ func (s *ModelLeaderboardService) Get(ctx context.Context, source, month string,
 	if err != nil {
 		return nil, err
 	}
-	key := source + "|" + monthStart.Format("2006-01")
+	curStart, curEnd, _ := ParseLeaderboardMonth("", now)
 
-	s.mu.Lock()
-	entry, ok := s.cache[key]
-	s.mu.Unlock()
-	if ok && now.Sub(entry.at) < leaderboardCacheTTL {
-		return redactLeaderboard(entry.resp, includeCost), nil
-	}
-
-	resp, err := s.build(ctx, source, monthStart, monthEnd, now)
+	hist, err := s.loadHistory(ctx, source, curStart, now)
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	s.cache[key] = leaderboardCacheEntry{at: now, resp: resp}
-	for k, e := range s.cache { // 顺手清理过期项，避免月份参数把 map 撑大
-		if now.Sub(e.at) >= leaderboardCacheTTL*5 {
-			delete(s.cache, k)
+	live, err := s.loadLive(ctx, source, curStart, curEnd, now)
+	if err != nil {
+		return nil, err
+	}
+	var daily []LeaderboardBucketPoint
+	switch {
+	case monthStart.Equal(curStart):
+		daily = live.daily
+	case monthStart.Before(curStart):
+		if daily, err = s.loadClosedDaily(ctx, source, hist, monthStart, monthEnd); err != nil {
+			return nil, err
 		}
 	}
-	s.mu.Unlock()
-	return redactLeaderboard(resp, includeCost), nil
+
+	resp := assembleLeaderboard(source, monthStart, monthEnd, now, hist, live, daily)
+	if !includeCost {
+		redactLeaderboard(resp)
+	}
+	return resp, nil
 }
 
-func (s *ModelLeaderboardService) build(ctx context.Context, source string, monthStart, monthEnd, now time.Time) (*ModelLeaderboardResponse, error) {
-	loc := timezone.Location()
-	isCurrentMonth := !now.Before(monthStart) && now.Before(monthEnd)
+func lbDetachedCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	// singleflight 的结果由多个请求共享，不能因首个请求断开而整体失败。
+	return context.WithTimeout(context.WithoutCancel(ctx), leaderboardQueryLimit)
+}
 
-	// 当月口径：区间截至 now；对比期 = 上月同期（月初到同一日时刻），历史月份则整月对比整月。
-	curEnd := monthEnd
-	prevStart := monthStart.AddDate(0, -1, 0)
-	prevEnd := monthStart
-	if isCurrentMonth {
-		curEnd = now
-		elapsed := now.Sub(monthStart)
-		prevEnd = prevStart.Add(elapsed)
-		if prevEnd.After(monthStart) {
-			prevEnd = monthStart
+func (s *ModelLeaderboardService) cachedHistory(source string, boundary, now time.Time) *lbHistory {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h := s.history[source]
+	if h != nil && h.boundary.Equal(boundary) && now.Sub(h.builtAt) < leaderboardHistoryTTL {
+		return h
+	}
+	return nil
+}
+
+func (s *ModelLeaderboardService) loadHistory(ctx context.Context, source string, boundary, now time.Time) (*lbHistory, error) {
+	if h := s.cachedHistory(source, boundary, now); h != nil {
+		return h, nil
+	}
+	// key 带上边界：跨月瞬间的请求不能复用仍在为旧月份构建的结果
+	v, err, _ := s.sf.Do("history|"+source+"|"+boundary.Format(time.RFC3339), func() (any, error) {
+		if h := s.cachedHistory(source, boundary, now); h != nil {
+			return h, nil
 		}
-	}
-	farPast := time.Date(2000, 1, 1, 0, 0, 0, 0, loc)
-	farFuture := now.Add(24 * time.Hour)
-
-	monthRows, err := s.repo.GetModelRanking(ctx, monthStart, curEnd, source)
-	if err != nil {
-		return nil, fmt.Errorf("monthly ranking: %w", err)
-	}
-	monthTotals, err := s.repo.GetTotals(ctx, monthStart, curEnd, source)
-	if err != nil {
-		return nil, fmt.Errorf("monthly totals: %w", err)
-	}
-	prevRows, err := s.repo.GetModelRanking(ctx, prevStart, prevEnd, source)
-	if err != nil {
-		return nil, fmt.Errorf("prev ranking: %w", err)
-	}
-	prevTotals, err := s.repo.GetTotals(ctx, prevStart, prevEnd, source)
-	if err != nil {
-		return nil, fmt.Errorf("prev totals: %w", err)
-	}
-	daily, err := s.repo.GetBucketedModelUsage(ctx, monthStart, curEnd, source, "day")
-	if err != nil {
-		return nil, fmt.Errorf("daily trend: %w", err)
-	}
-	allRows, err := s.repo.GetModelRanking(ctx, farPast, farFuture, source)
-	if err != nil {
-		return nil, fmt.Errorf("all-time ranking: %w", err)
-	}
-	allTotals, err := s.repo.GetTotals(ctx, farPast, farFuture, source)
-	if err != nil {
-		return nil, fmt.Errorf("all-time totals: %w", err)
-	}
-	monthly, err := s.repo.GetBucketedModelUsage(ctx, farPast, farFuture, source, "month")
-	if err != nil {
-		return nil, fmt.Errorf("monthly trend: %w", err)
-	}
-	monthTotalRows, err := s.repo.GetMonthlyTotals(ctx, source)
-	if err != nil {
-		return nil, fmt.Errorf("month totals: %w", err)
-	}
-
-	// 历史累计的“对比期”= 截至上月末的累计，用来标出本月带来的排名变化。
-	var beforeMonthRows []LeaderboardModelRow
-	if isCurrentMonth {
-		beforeMonthRows, err = s.repo.GetModelRanking(ctx, farPast, monthStart, source)
+		qctx, cancel := lbDetachedCtx(ctx)
+		defer cancel()
+		h, err := s.buildHistory(qctx, source, boundary, now)
 		if err != nil {
-			return nil, fmt.Errorf("pre-month ranking: %w", err)
+			return nil, err
 		}
+		s.mu.Lock()
+		if old := s.history[source]; old == nil || !old.boundary.After(h.boundary) {
+			s.history[source] = h
+		}
+		s.mu.Unlock()
+		return h, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	h, ok := v.(*lbHistory)
+	if !ok {
+		return nil, fmt.Errorf("model leaderboard: unexpected history type %T", v)
+	}
+	return h, nil
+}
+
+func (s *ModelLeaderboardService) buildHistory(ctx context.Context, source string, boundary, now time.Time) (*lbHistory, error) {
+	farPast := time.Date(2000, 1, 1, 0, 0, 0, 0, timezone.Location())
+	stats, err := s.repo.GetMonthModelStats(ctx, farPast, boundary, source)
+	if err != nil {
+		return nil, fmt.Errorf("history month stats: %w", err)
+	}
+	monthUsers, err := s.repo.GetMonthActiveUsers(ctx, farPast, boundary)
+	if err != nil {
+		return nil, fmt.Errorf("history month users: %w", err)
+	}
+	pairs, err := s.repo.GetModelUserPairs(ctx, farPast, boundary, source)
+	if err != nil {
+		return nil, fmt.Errorf("history model users: %w", err)
+	}
+
+	h := &lbHistory{
+		boundary:   boundary,
+		builtAt:    now,
+		byMonth:    map[string][]LeaderboardModelStat{},
+		monthUsers: monthUsers,
+		daily:      map[string][]LeaderboardBucketPoint{},
+	}
+	for _, st := range stats {
+		h.byMonth[st.Month] = append(h.byMonth[st.Month], st)
+	}
+	for m := range h.byMonth {
+		h.months = append(h.months, m)
+	}
+	sort.Strings(h.months)
+	h.modelUsers, h.allUsers = lbUserSets(pairs)
+	h.merged = lbMergeStats(stats)
+	for i := range h.merged {
+		h.merged[i].Users = int64(len(h.modelUsers[h.merged[i].Model]))
+	}
+	return h, nil
+}
+
+func (s *ModelLeaderboardService) cachedLive(source string, monthStart, now time.Time) *lbLive {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l := s.live[source]
+	if l != nil && l.monthStart.Equal(monthStart) && now.Sub(l.builtAt) < leaderboardLiveTTL {
+		return l
+	}
+	return nil
+}
+
+func (s *ModelLeaderboardService) loadLive(ctx context.Context, source string, monthStart, monthEnd, now time.Time) (*lbLive, error) {
+	if l := s.cachedLive(source, monthStart, now); l != nil {
+		return l, nil
+	}
+	v, err, _ := s.sf.Do("live|"+source+"|"+monthStart.Format(time.RFC3339), func() (any, error) {
+		if l := s.cachedLive(source, monthStart, now); l != nil {
+			return l, nil
+		}
+		qctx, cancel := lbDetachedCtx(ctx)
+		defer cancel()
+		l, err := s.buildLive(qctx, source, monthStart, monthEnd, now)
+		if err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		if old := s.live[source]; old == nil || !old.monthStart.After(l.monthStart) {
+			s.live[source] = l
+		}
+		s.mu.Unlock()
+		return l, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	l, ok := v.(*lbLive)
+	if !ok {
+		return nil, fmt.Errorf("model leaderboard: unexpected live type %T", v)
+	}
+	return l, nil
+}
+
+func (s *ModelLeaderboardService) buildLive(ctx context.Context, source string, monthStart, monthEnd, now time.Time) (*lbLive, error) {
+	stats, err := s.repo.GetMonthModelStats(ctx, monthStart, monthEnd, source)
+	if err != nil {
+		return nil, fmt.Errorf("current month stats: %w", err)
+	}
+	pairs, err := s.repo.GetModelUserPairs(ctx, monthStart, monthEnd, source)
+	if err != nil {
+		return nil, fmt.Errorf("current month model users: %w", err)
+	}
+	daily, err := s.repo.GetDailyModelUsage(ctx, monthStart, monthEnd, source)
+	if err != nil {
+		return nil, fmt.Errorf("current month daily: %w", err)
+	}
+
+	// 对比期 = 上月同期：上月月初起，经过与当月相同的时长（不超过上月末）。
+	prevStart := monthStart.AddDate(0, -1, 0)
+	prevEnd := prevStart.Add(now.Sub(monthStart))
+	if prevEnd.After(monthStart) {
+		prevEnd = monthStart
+	}
+	prevStats, err := s.repo.GetMonthModelStats(ctx, prevStart, prevEnd, source)
+	if err != nil {
+		return nil, fmt.Errorf("prev period stats: %w", err)
+	}
+	prevUsers, err := s.repo.GetMonthActiveUsers(ctx, prevStart, prevEnd)
+	if err != nil {
+		return nil, fmt.Errorf("prev period users: %w", err)
+	}
+
+	l := &lbLive{
+		builtAt:    now,
+		monthStart: monthStart,
+		month:      monthStart.Format("2006-01"),
+		daily:      daily,
+		prevEnd:    prevEnd,
+		prev:       lbMergeStats(prevStats),
+	}
+	for _, n := range prevUsers {
+		l.prevUsers += n
+	}
+	l.modelUsers, l.users = lbUserSets(pairs)
+	l.merged = lbMergeStats(stats)
+	for i := range l.merged {
+		l.merged[i].Month = l.month
+		l.merged[i].Users = int64(len(l.modelUsers[l.merged[i].Model]))
+	}
+	return l, nil
+}
+
+func (s *ModelLeaderboardService) loadClosedDaily(ctx context.Context, source string, h *lbHistory, start, end time.Time) ([]LeaderboardBucketPoint, error) {
+	key := start.Format("2006-01")
+	h.dailyMu.Lock()
+	pts, ok := h.daily[key]
+	h.dailyMu.Unlock()
+	if ok {
+		return pts, nil
+	}
+	v, err, _ := s.sf.Do("daily|"+source+"|"+h.boundary.Format(time.RFC3339)+"|"+key, func() (any, error) {
+		h.dailyMu.Lock()
+		cached, hit := h.daily[key]
+		h.dailyMu.Unlock()
+		if hit {
+			return cached, nil
+		}
+		qctx, cancel := lbDetachedCtx(ctx)
+		defer cancel()
+		pts, err := s.repo.GetDailyModelUsage(qctx, start, end, source)
+		if err != nil {
+			return nil, fmt.Errorf("daily trend %s: %w", key, err)
+		}
+		h.dailyMu.Lock()
+		h.daily[key] = pts
+		h.dailyMu.Unlock()
+		return pts, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if pts, ok = v.([]LeaderboardBucketPoint); !ok {
+		return nil, fmt.Errorf("model leaderboard: unexpected daily type %T", v)
+	}
+	return pts, nil
+}
+
+// ---------- 组装 ----------
+
+func assembleLeaderboard(source string, monthStart, monthEnd, now time.Time, h *lbHistory, l *lbLive, daily []LeaderboardBucketPoint) *ModelLeaderboardResponse {
+	loc := timezone.Location()
+	monthKey := monthStart.Format("2006-01")
+	isCurrent := monthStart.Equal(l.monthStart)
+
+	monthData := func(key string) ([]LeaderboardModelStat, int64) {
+		if key == l.month {
+			return l.merged, int64(len(l.users))
+		}
+		return h.byMonth[key], h.monthUsers[key]
+	}
+
+	curRows, curUsers := monthData(monthKey)
+	var prevRows []LeaderboardModelStat
+	var prevUsers int64
+	periodEnd, labelEnd := monthEnd, monthEnd
+	if isCurrent {
+		prevRows, prevUsers = l.prev, l.prevUsers
+		periodEnd, labelEnd = now, now
+	} else {
+		prevRows, prevUsers = monthData(monthStart.AddDate(0, -1, 0).Format("2006-01"))
+	}
+	if prevRows == nil {
+		prevRows = []LeaderboardModelStat{} // 非 nil：对比期无数据的模型标记为新上榜
 	}
 
 	resp := &ModelLeaderboardResponse{
 		Source:      source,
 		Timezone:    timezone.Name(),
 		GeneratedAt: now.In(loc).Format(time.RFC3339),
-		Month:       monthStart.Format("2006-01"),
-		IsCurrent:   isCurrentMonth,
+		Month:       monthKey,
+		IsCurrent:   isCurrent,
 		CostVisible: true,
 	}
 
-	prevSummary := toLeaderboardSummary(prevTotals, loc)
+	prevSummary := lbSummarize(prevRows, prevUsers, loc)
 	resp.Monthly = LeaderboardPeriod{
-		Label:   monthStart.Format("2006-01"),
+		Label:   monthKey,
 		Start:   monthStart.Format(time.RFC3339),
-		End:     curEnd.In(loc).Format(time.RFC3339),
-		Summary: toLeaderboardSummary(monthTotals, loc),
+		End:     periodEnd.In(loc).Format(time.RFC3339),
+		Summary: lbSummarize(curRows, curUsers, loc),
 		Prev:    &prevSummary,
-		Ranking: buildLeaderboardRanking(monthRows, prevRows, loc),
-		Trend:   lbBuildDailySeries(daily, monthStart, curEnd, loc),
+		Ranking: buildLeaderboardRanking(curRows, prevRows, loc),
+		Trend:   lbBuildDailySeries(daily, monthStart, labelEnd, loc),
 	}
+
+	// 历史累计 = 已结束月份快照 ⊕ 当月实时；去重用户用集合并集精确合并。
+	allRows := lbMergeStats(h.merged, l.merged)
+	for i := range allRows {
+		m := allRows[i].Model
+		allRows[i].Users = int64(len(h.modelUsers[m]) + lbCountMissing(l.modelUsers[m], h.modelUsers[m]))
+	}
+	allUsers := int64(len(h.allUsers) + lbCountMissing(l.users, h.allUsers))
+
+	months := make([]string, 0, len(h.months)+1)
+	months = append(months, h.months...)
+	if len(l.merged) > 0 && (len(months) == 0 || months[len(months)-1] != l.month) {
+		months = append(months, l.month)
+	}
+	monthly := make([]LeaderboardBucketPoint, 0, len(months)*8)
+	for _, m := range months {
+		rows, _ := monthData(m)
+		for _, r := range rows {
+			monthly = append(monthly, LeaderboardBucketPoint{Bucket: m, Model: r.Model, Requests: r.Requests, TotalTokens: r.TotalTokens})
+		}
+	}
+
+	var beforeMonth []LeaderboardModelStat // 当月视图：对比截至上月末的累计，标出本月带来的排名变化
+	if isCurrent {
+		beforeMonth = append([]LeaderboardModelStat{}, h.merged...)
+	}
+	allSummary := lbSummarize(allRows, allUsers, loc)
 	resp.AllTime = LeaderboardPeriod{
 		Label:   "all",
-		Start:   lbFormatOptionalTime(allTotals.FirstAt, loc),
+		Start:   allSummary.FirstAt,
 		End:     now.In(loc).Format(time.RFC3339),
-		Summary: toLeaderboardSummary(allTotals, loc),
-		Ranking: buildLeaderboardRanking(allRows, beforeMonthRows, loc),
-		Trend:   lbBuildBucketSeries(monthly, lbMonthLabels(monthTotalRows)),
+		Summary: allSummary,
+		Ranking: buildLeaderboardRanking(allRows, beforeMonth, loc),
+		Trend:   lbBuildBucketSeries(monthly, months),
 	}
-	resp.MonthRows = lbBuildMonthRows(monthTotalRows, monthly)
-	resp.Months = make([]string, 0, len(monthTotalRows))
-	for i := len(monthTotalRows) - 1; i >= 0; i-- {
-		resp.Months = append(resp.Months, monthTotalRows[i].Month)
+
+	resp.MonthRows = make([]LeaderboardMonthRow, 0, len(months))
+	resp.Months = make([]string, 0, len(months)+1)
+	for i := len(months) - 1; i >= 0; i-- { // 新月份在前
+		rows, users := monthData(months[i])
+		resp.MonthRows = append(resp.MonthRows, lbMonthRow(months[i], rows, users))
+		resp.Months = append(resp.Months, months[i])
 	}
-	if isCurrentMonth && (len(resp.Months) == 0 || resp.Months[0] != resp.Month) {
-		resp.Months = append([]string{resp.Month}, resp.Months...)
+	if len(resp.Months) == 0 || resp.Months[0] != l.month {
+		resp.Months = append([]string{l.month}, resp.Months...)
 	}
-	return resp, nil
+	return resp
 }
 
-func lbFormatOptionalTime(t *time.Time, loc *time.Location) string {
-	if t == nil {
-		return ""
+func lbUserSets(pairs []LeaderboardModelUser) (map[string]map[int64]struct{}, map[int64]struct{}) {
+	byModel := map[string]map[int64]struct{}{}
+	all := map[int64]struct{}{}
+	for _, p := range pairs {
+		set := byModel[p.Model]
+		if set == nil {
+			set = map[int64]struct{}{}
+			byModel[p.Model] = set
+		}
+		set[p.UserID] = struct{}{}
+		all[p.UserID] = struct{}{}
 	}
-	return t.In(loc).Format(time.RFC3339)
+	return byModel, all
 }
 
-func toLeaderboardSummary(t *LeaderboardTotals, loc *time.Location) LeaderboardSummary {
-	if t == nil {
-		return LeaderboardSummary{}
+// lbCountMissing 返回 a 中不在 b 里的元素个数，即 |a ∪ b| - |b|。
+func lbCountMissing(a, b map[int64]struct{}) int {
+	n := 0
+	for id := range a {
+		if _, ok := b[id]; !ok {
+			n++
+		}
 	}
-	cost, actual := t.Cost, t.ActualCost
-	return LeaderboardSummary{
-		Requests:        t.Requests,
-		TotalTokens:     t.TotalTokens,
-		InputTokens:     t.InputTokens,
-		OutputTokens:    t.OutputTokens,
-		CacheReadTokens: t.CacheReadTokens,
-		Users:           t.Users,
-		Models:          t.Models,
-		FirstAt:         lbFormatOptionalTime(t.FirstAt, loc),
-		LastAt:          lbFormatOptionalTime(t.LastAt, loc),
-		Cost:            &cost,
-		ActualCost:      &actual,
+	return n
+}
+
+// lbMergeStats 按模型合并多组统计（返回新切片，不修改入参）。Users 为简单相加，需要精确值时由调用方覆盖。
+func lbMergeStats(groups ...[]LeaderboardModelStat) []LeaderboardModelStat {
+	idx := map[string]int{}
+	out := make([]LeaderboardModelStat, 0, 32)
+	for _, g := range groups {
+		for _, r := range g {
+			i, ok := idx[r.Model]
+			if !ok {
+				r.Month = ""
+				idx[r.Model] = len(out)
+				out = append(out, r)
+				continue
+			}
+			m := &out[i]
+			m.Requests += r.Requests
+			m.InputTokens += r.InputTokens
+			m.OutputTokens += r.OutputTokens
+			m.CacheCreationTokens += r.CacheCreationTokens
+			m.CacheReadTokens += r.CacheReadTokens
+			m.TotalTokens += r.TotalTokens
+			m.Users += r.Users
+			m.Images += r.Images
+			m.DurationMsSum += r.DurationMsSum
+			m.DurationCount += r.DurationCount
+			m.FirstTokenMsSum += r.FirstTokenMsSum
+			m.FirstTokenCount += r.FirstTokenCount
+			m.Cost += r.Cost
+			m.ActualCost += r.ActualCost
+			if r.FirstUsedAt.Before(m.FirstUsedAt) {
+				m.FirstUsedAt = r.FirstUsedAt
+			}
+			if r.LastUsedAt.After(m.LastUsedAt) {
+				m.LastUsedAt = r.LastUsedAt
+			}
+		}
 	}
+	return out
+}
+
+func lbSummarize(rows []LeaderboardModelStat, users int64, loc *time.Location) LeaderboardSummary {
+	var s LeaderboardSummary
+	var cost, actual float64
+	var first, last time.Time
+	for _, r := range rows {
+		s.Requests += r.Requests
+		s.TotalTokens += r.TotalTokens
+		s.InputTokens += r.InputTokens
+		s.OutputTokens += r.OutputTokens
+		s.CacheReadTokens += r.CacheReadTokens
+		cost += r.Cost
+		actual += r.ActualCost
+		s.Models++
+		if first.IsZero() || (!r.FirstUsedAt.IsZero() && r.FirstUsedAt.Before(first)) {
+			first = r.FirstUsedAt
+		}
+		if r.LastUsedAt.After(last) {
+			last = r.LastUsedAt
+		}
+	}
+	s.Users = users
+	if !first.IsZero() {
+		s.FirstAt = first.In(loc).Format(time.RFC3339)
+	}
+	if !last.IsZero() {
+		s.LastAt = last.In(loc).Format(time.RFC3339)
+	}
+	s.Cost, s.ActualCost = &cost, &actual
+	return s
 }
 
 func lbSafeRatio(a, b int64) float64 {
@@ -372,10 +671,25 @@ func lbSafeRatio(a, b int64) float64 {
 	return float64(a) / float64(b)
 }
 
-func buildLeaderboardRanking(rows, prevRows []LeaderboardModelRow, loc *time.Location) []LeaderboardRankItem {
-	sorted := append([]LeaderboardModelRow(nil), rows...)
+func lbAvg(sum, count int64) float64 {
+	if count <= 0 {
+		return 0
+	}
+	return float64(sum) / float64(count)
+}
+
+func lbFormatTime(t time.Time, loc *time.Location) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.In(loc).Format(time.RFC3339)
+}
+
+// buildLeaderboardRanking 排序并计算占比/环比。prevRows 为 nil 表示无对比期（不标新上榜）。
+func buildLeaderboardRanking(rows, prevRows []LeaderboardModelStat, loc *time.Location) []LeaderboardRankItem {
+	sorted := append([]LeaderboardModelStat(nil), rows...)
 	sortLeaderboardRows(sorted)
-	prevSorted := append([]LeaderboardModelRow(nil), prevRows...)
+	prevSorted := append([]LeaderboardModelStat(nil), prevRows...)
 	sortLeaderboardRows(prevSorted)
 	prevIndex := make(map[string]int, len(prevSorted))
 	prevReq := make(map[string]int64, len(prevSorted))
@@ -407,10 +721,10 @@ func buildLeaderboardRanking(rows, prevRows []LeaderboardModelRow, loc *time.Loc
 			CacheHitRate:        lbSafeRatio(r.CacheReadTokens, prompt),
 			Users:               r.Users,
 			Images:              r.Images,
-			AvgDurationMs:       r.AvgDurationMs,
-			AvgFirstTokenMs:     r.AvgFirstTokenMs,
-			FirstUsedAt:         r.FirstUsedAt.In(loc).Format(time.RFC3339),
-			LastUsedAt:          r.LastUsedAt.In(loc).Format(time.RFC3339),
+			AvgDurationMs:       lbAvg(r.DurationMsSum, r.DurationCount),
+			AvgFirstTokenMs:     lbAvg(r.FirstTokenMsSum, r.FirstTokenCount),
+			FirstUsedAt:         lbFormatTime(r.FirstUsedAt, loc),
+			LastUsedAt:          lbFormatTime(r.LastUsedAt, loc),
 			Cost:                &cost,
 			ActualCost:          &actual,
 		}
@@ -431,7 +745,7 @@ func buildLeaderboardRanking(rows, prevRows []LeaderboardModelRow, loc *time.Loc
 	return out
 }
 
-func sortLeaderboardRows(rows []LeaderboardModelRow) {
+func sortLeaderboardRows(rows []LeaderboardModelStat) {
 	sort.SliceStable(rows, func(i, j int) bool {
 		if rows[i].Requests != rows[j].Requests {
 			return rows[i].Requests > rows[j].Requests
@@ -451,15 +765,7 @@ func lbBuildDailySeries(points []LeaderboardBucketPoint, start, end time.Time, l
 	return lbBuildBucketSeries(points, labels)
 }
 
-func lbMonthLabels(rows []LeaderboardMonthTotal) []string {
-	labels := make([]string, 0, len(rows))
-	for _, r := range rows {
-		labels = append(labels, r.Month)
-	}
-	return labels
-}
-
-// buildBucketSeries 取区间内调用量 Top N 模型各自一条序列，其余并入 __other__。
+// lbBuildBucketSeries 取区间内调用量 Top N 模型各自一条序列，其余并入 __other__。
 func lbBuildBucketSeries(points []LeaderboardBucketPoint, labels []string) LeaderboardSeries {
 	idx := make(map[string]int, len(labels))
 	for i, l := range labels {
@@ -510,68 +816,40 @@ func lbBuildBucketSeries(points []LeaderboardBucketPoint, labels []string) Leade
 	return LeaderboardSeries{Labels: labels, Datasets: datasets}
 }
 
-func lbBuildMonthRows(totals []LeaderboardMonthTotal, points []LeaderboardBucketPoint) []LeaderboardMonthRow {
-	type top struct {
-		model string
-		req   int64
-	}
-	best := map[string]top{}
-	for _, p := range points {
-		b := best[p.Bucket]
-		if p.Requests > b.req || (p.Requests == b.req && (b.model == "" || p.Model < b.model)) {
-			best[p.Bucket] = top{model: p.Model, req: p.Requests}
+func lbMonthRow(month string, rows []LeaderboardModelStat, users int64) LeaderboardMonthRow {
+	row := LeaderboardMonthRow{Month: month, Users: users, Models: int64(len(rows))}
+	var cost, actual float64
+	var topReq int64
+	for _, r := range rows {
+		row.Requests += r.Requests
+		row.TotalTokens += r.TotalTokens
+		cost += r.Cost
+		actual += r.ActualCost
+		if r.Requests > topReq || (r.Requests == topReq && (row.TopModel == "" || r.Model < row.TopModel)) {
+			row.TopModel, topReq = r.Model, r.Requests
 		}
 	}
-	out := make([]LeaderboardMonthRow, 0, len(totals))
-	for i := len(totals) - 1; i >= 0; i-- { // 新月份在前
-		t := totals[i]
-		cost, actual := t.Cost, t.ActualCost
-		b := best[t.Month]
-		out = append(out, LeaderboardMonthRow{
-			Month:         t.Month,
-			Requests:      t.Requests,
-			TotalTokens:   t.TotalTokens,
-			Users:         t.Users,
-			Models:        t.Models,
-			TopModel:      b.model,
-			TopModelShare: lbSafeRatio(b.req, t.Requests),
-			Cost:          &cost,
-			ActualCost:    &actual,
-		})
-	}
-	return out
+	row.TopModelShare = lbSafeRatio(topReq, row.Requests)
+	row.Cost, row.ActualCost = &cost, &actual
+	return row
 }
 
-// redactLeaderboard 返回一份浅拷贝；includeCost=false 时抹掉所有费用字段。
-// 缓存里的原始对象不被修改。
-func redactLeaderboard(src *ModelLeaderboardResponse, includeCost bool) *ModelLeaderboardResponse {
-	out := *src
-	out.CostVisible = includeCost
-	if includeCost {
-		return &out
+// redactLeaderboard 就地抹掉所有费用字段（响应每次新建，不共享）。
+func redactLeaderboard(resp *ModelLeaderboardResponse) {
+	resp.CostVisible = false
+	lbRedactPeriod(&resp.Monthly)
+	lbRedactPeriod(&resp.AllTime)
+	for i := range resp.MonthRows {
+		resp.MonthRows[i].Cost, resp.MonthRows[i].ActualCost = nil, nil
 	}
-	out.Monthly = lbRedactPeriod(src.Monthly)
-	out.AllTime = lbRedactPeriod(src.AllTime)
-	out.MonthRows = make([]LeaderboardMonthRow, len(src.MonthRows))
-	for i, r := range src.MonthRows {
-		r.Cost, r.ActualCost = nil, nil
-		out.MonthRows[i] = r
-	}
-	return &out
 }
 
-func lbRedactPeriod(p LeaderboardPeriod) LeaderboardPeriod {
+func lbRedactPeriod(p *LeaderboardPeriod) {
 	p.Summary.Cost, p.Summary.ActualCost = nil, nil
 	if p.Prev != nil {
-		prev := *p.Prev
-		prev.Cost, prev.ActualCost = nil, nil
-		p.Prev = &prev
+		p.Prev.Cost, p.Prev.ActualCost = nil, nil
 	}
-	ranking := make([]LeaderboardRankItem, len(p.Ranking))
-	for i, r := range p.Ranking {
-		r.Cost, r.ActualCost = nil, nil
-		ranking[i] = r
+	for i := range p.Ranking {
+		p.Ranking[i].Cost, p.Ranking[i].ActualCost = nil, nil
 	}
-	p.Ranking = ranking
-	return p
 }
