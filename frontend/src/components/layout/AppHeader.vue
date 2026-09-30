@@ -38,6 +38,20 @@
           <span class="hidden sm:inline">{{ t('nav.docs') }}</span>
         </a>
 
+        <!-- Model Leaderboard Entry (DarthCY 定制；位于模型广场左侧，icon only below sm) -->
+        <router-link
+          v-if="user"
+          to="/model-leaderboard"
+          :title="t('modelLeaderboard.title')"
+          :aria-label="t('modelLeaderboard.title')"
+          data-testid="header-model-leaderboard"
+          class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
+          active-class="bg-gray-100 text-gray-900 dark:bg-dark-800 dark:text-white"
+        >
+          <Icon name="trophy" size="sm" />
+          <span class="hidden sm:inline">{{ t('modelLeaderboard.nav') }}</span>
+        </router-link>
+
         <!-- Model Plaza Entry (icon only below sm) -->
         <router-link
           v-if="user && modelPlazaEnabled"

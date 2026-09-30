@@ -186,6 +186,20 @@ const routes: RouteRecordRaw[] = [
     }
   },
 
+  // 模型调用量排行榜（DarthCY 定制）：登录可见，全站聚合
+  {
+    path: '/model-leaderboard',
+    name: 'ModelLeaderboard',
+    component: () => import('@/views/ModelLeaderboardView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Model Leaderboard',
+      titleKey: 'modelLeaderboard.title',
+      descriptionKey: 'modelLeaderboard.description'
+    }
+  },
+
   // ==================== User Routes ====================
   {
     path: '/',
