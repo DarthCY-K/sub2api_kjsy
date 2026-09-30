@@ -10,16 +10,7 @@ export default {
     tabs: { monthly: 'This month', allTime: 'All time', months: 'By month' },
     source: { label: 'Model', requested: 'Requested', upstream: 'Upstream' },
     month: 'Month',
-    rankBy: 'Rank by',
-    metric: { requests: 'Requests', tokens: 'Tokens', users: 'Users' },
-    hero: {
-      currentChampion: 'Champion this month',
-      monthChampion: '{month} champion',
-      allTimeChampion: 'All-time champion',
-      share: '{pct} of all requests',
-      lead: 'Ahead of #2 by {n}'
-    },
-    podium: { first: 'Champion', second: 'Runner-up', third: 'Third place' },
+    metric: { label: 'Rank by', requests: 'Requests', tokens: 'Tokens', users: 'Active users' },
     summary: {
       requests: 'Requests',
       tokens: 'Total tokens',
@@ -33,17 +24,16 @@ export default {
       range: '{start} ~ {end}'
     },
     charts: {
-      share: 'Request share',
-      topBar: 'Top 10 by requests',
-      trendDaily: 'Daily requests',
-      trendMonthly: 'Monthly requests',
+      share: '{metric} share',
+      topBar: 'Top 10 · {metric}',
+      trendDaily: 'Daily trend · {metric}',
+      trendMonthly: 'Monthly trend · {metric}',
       tokenMix: 'Token mix (Top 10)',
       input: 'Input',
       output: 'Output',
       cacheCreate: 'Cache write',
       cacheRead: 'Cache read',
-      other: 'Others',
-      totalRequests: 'Total'
+      other: 'Others'
     },
     table: {
       title: 'Full ranking',
@@ -56,12 +46,10 @@ export default {
       output: 'Output',
       cacheHit: 'Cache hit',
       users: 'Users',
-      images: 'Images',
       latency: 'Avg latency',
       ttft: 'TTFT',
       growth: 'Change',
       lastUsed: 'Last used',
-      firstUsed: 'First used',
       cost: 'Standard cost',
       actualCost: 'Actual charged',
       newEntry: 'New',
@@ -71,9 +59,8 @@ export default {
       title: 'Monthly summary',
       month: 'Month',
       topModel: 'Top model',
-      topShare: 'Top share',
-      peak: 'Peak'
+      topShare: 'Top share'
     },
-    footnote: 'Aggregated from site-wide usage logs; current month refreshes every 60s; timezone {tz}. Ranked by requests, ties broken by tokens.'
+    footnote: 'Aggregated from site-wide usage logs; current month refreshes every 60s; timezone {tz}. Ranked by {metric}, ties broken by {tie}.'
   }
 }

@@ -1,118 +1,69 @@
 <template>
   <AppLayout>
     <div class="space-y-6">
-      <!-- Hero：标题 / 控件 / 当前冠军 -->
-      <section class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-primary-600 via-teal-600 to-cyan-700 p-5 text-white shadow-xl shadow-primary-500/20 md:p-6">
-        <div class="pointer-events-none absolute -left-16 -top-24 h-64 w-64 rounded-full bg-white/10 blur-3xl" />
-        <div class="pointer-events-none absolute -bottom-24 right-10 h-72 w-72 rounded-full bg-cyan-300/20 blur-3xl" />
-        <div class="pointer-events-none absolute right-1/3 top-0 h-40 w-40 rounded-full bg-amber-300/10 blur-2xl" />
+      <!-- 筛选栏 -->
+      <div class="card p-4">
+        <div class="flex flex-wrap items-center gap-x-5 gap-y-3">
+          <div :class="segWrapClass" role="tablist">
+            <button
+              v-for="tab in tabs"
+              :key="tab.value"
+              type="button"
+              role="tab"
+              :aria-selected="activeTab === tab.value"
+              :class="[segBtnClass, activeTab === tab.value ? segActiveClass : segIdleClass]"
+              @click="activeTab = tab.value"
+            >
+              {{ tab.label }}
+            </button>
+          </div>
 
-        <div class="relative flex flex-col gap-6 lg:flex-row lg:items-stretch lg:justify-between">
-          <div class="flex min-w-0 flex-col gap-4">
-            <div class="flex items-center gap-3">
-              <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/15 ring-1 ring-white/25 backdrop-blur">
-                <Icon name="trophy" size="lg" />
-              </div>
-              <div class="min-w-0">
-                <h1 class="text-xl font-bold tracking-tight md:text-2xl">{{ t('modelLeaderboard.title') }}</h1>
-                <p class="truncate text-sm text-white/75">{{ t('modelLeaderboard.description') }}</p>
-              </div>
-            </div>
-
-            <div class="flex flex-wrap items-center gap-2.5">
-              <div class="inline-flex rounded-xl bg-black/15 p-1 ring-1 ring-white/15 backdrop-blur" role="tablist">
-                <button
-                  v-for="tab in tabs"
-                  :key="tab.value"
-                  type="button"
-                  role="tab"
-                  :aria-selected="activeTab === tab.value"
-                  class="rounded-lg px-3 py-1.5 text-sm font-medium transition-all"
-                  :class="activeTab === tab.value ? heroActiveClass : heroIdleClass"
-                  @click="activeTab = tab.value"
-                >
-                  {{ tab.label }}
-                </button>
-              </div>
-
-              <div class="inline-flex items-center gap-1 rounded-xl bg-black/15 p-1 ring-1 ring-white/15 backdrop-blur">
-                <span class="px-1.5 text-xs text-white/70">{{ t('modelLeaderboard.source.label') }}</span>
-                <button
-                  v-for="s in sources"
-                  :key="s"
-                  type="button"
-                  class="rounded-lg px-2.5 py-1 text-xs font-medium transition-all"
-                  :class="source === s ? heroActiveClass : heroIdleClass"
-                  @click="setSource(s)"
-                >
-                  {{ t(`modelLeaderboard.source.${s}`) }}
-                </button>
-              </div>
-
-              <div v-if="activeTab === 'monthly' && monthOptions.length" class="inline-flex items-center gap-1.5 rounded-xl bg-black/15 py-1 pl-2.5 pr-1 ring-1 ring-white/15 backdrop-blur">
-                <Icon name="calendar" size="sm" class="text-white/70" />
-                <label for="lb-month" class="sr-only">{{ t('modelLeaderboard.month') }}</label>
-                <select
-                  id="lb-month"
-                  v-model="month"
-                  class="h-7 cursor-pointer rounded-lg border-0 bg-white/10 py-0 pl-2 pr-7 text-sm font-medium text-white focus:ring-2 focus:ring-white/40"
-                  @change="load()"
-                >
-                  <option v-for="m in monthOptions" :key="m" :value="m" class="text-gray-900">{{ m }}</option>
-                </select>
-              </div>
-
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('modelLeaderboard.metric.label') }}:</span>
+            <div :class="segWrapClass">
               <button
+                v-for="m in metrics"
+                :key="m"
                 type="button"
-                class="inline-flex items-center rounded-xl bg-white/15 px-3 py-1.5 text-sm font-medium ring-1 ring-white/25 backdrop-blur transition-colors hover:bg-white/25 disabled:opacity-60"
-                :disabled="loading"
-                @click="load(true)"
+                :class="[segBtnClass, metric === m ? segActiveClass : segIdleClass]"
+                @click="setMetric(m)"
               >
-                <Icon name="refresh" size="sm" :class="loading ? 'animate-spin' : ''" />
-                <span class="ml-1.5">{{ t('modelLeaderboard.refresh') }}</span>
+                {{ t(`modelLeaderboard.metric.${m}`) }}
               </button>
             </div>
-
-            <p v-if="data" class="text-xs text-white/65">
-              {{ periodCaption }}
-            </p>
           </div>
 
-          <!-- 冠军卡 -->
-          <div
-            v-if="champion"
-            class="relative w-full shrink-0 overflow-hidden rounded-2xl bg-white/10 p-4 ring-1 ring-white/25 backdrop-blur-md lg:w-[340px]"
-          >
-            <div class="pointer-events-none absolute -right-8 -top-8 h-28 w-28 rounded-full bg-amber-300/30 blur-2xl" />
-            <div class="relative flex items-center justify-between gap-2">
-              <span class="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-amber-300 to-yellow-400 px-2.5 py-0.5 text-xs font-bold text-amber-900 shadow-lg shadow-amber-500/30">
-                <Icon name="trophy" size="xs" :stroke-width="2" />
-                {{ championTitle }}
-              </span>
-              <span v-if="champion.requests_growth !== null" class="rounded-full bg-white/15 px-2 py-0.5 text-xs font-semibold tabular-nums">
-                {{ formatGrowth(champion.requests_growth) }}
-              </span>
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('modelLeaderboard.source.label') }}:</span>
+            <div :class="segWrapClass">
+              <button
+                v-for="s in sources"
+                :key="s"
+                type="button"
+                :class="[segBtnClass, source === s ? segActiveClass : segIdleClass]"
+                @click="setSource(s)"
+              >
+                {{ t(`modelLeaderboard.source.${s}`) }}
+              </button>
             </div>
-            <div class="relative mt-3 flex items-center gap-3">
-              <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white shadow-lg">
-                <ModelIcon :model="champion.model" size="26px" />
-              </div>
-              <p class="min-w-0 truncate text-lg font-bold" :title="champion.model">{{ champion.model }}</p>
+          </div>
+
+          <div v-if="activeTab === 'monthly' && monthOptions.length" class="flex items-center gap-2">
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('modelLeaderboard.month') }}:</span>
+            <div class="w-32">
+              <Select v-model="month" :options="monthOptions" :aria-label="t('modelLeaderboard.month')" @change="load()" />
             </div>
-            <div class="relative mt-3 flex items-baseline gap-2">
-              <span class="text-3xl font-black tabular-nums tracking-tight">{{ formatInt(champion.requests) }}</span>
-              <span class="text-xs text-white/70">{{ t('modelLeaderboard.metric.requests') }}</span>
-            </div>
-            <div class="relative mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/20">
-              <div class="h-full rounded-full bg-gradient-to-r from-amber-200 to-yellow-300" :style="{ width: pct(champion.request_share) }" />
-            </div>
-            <div class="relative mt-2 flex flex-wrap justify-between gap-x-3 gap-y-1 text-xs text-white/80">
-              <span>{{ t('modelLeaderboard.hero.share', { pct: pct(champion.request_share) }) }}</span>
-              <span v-if="runnerUp">{{ t('modelLeaderboard.hero.lead', { n: formatInt(champion.requests - runnerUp.requests) }) }}</span>
-            </div>
+          </div>
+
+          <div class="ml-auto flex items-center gap-3">
+            <span v-if="periodCaption" class="text-xs text-gray-500 dark:text-gray-400">{{ periodCaption }}</span>
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" @click="load()">
+              <Icon name="refresh" size="sm" :class="loading ? 'animate-spin' : ''" />
+              {{ t('modelLeaderboard.refresh') }}
+            </button>
           </div>
         </div>
-      </section>
+      </div>
 
       <div v-if="loading && !data" class="flex items-center justify-center py-16"><LoadingSpinner /></div>
       <div v-else-if="loadFailed && !data" class="card p-8 text-center text-sm text-red-600 dark:text-red-400">
@@ -122,239 +73,132 @@
       <template v-else-if="data">
         <!-- ============ 当月 / 历史累计 ============ -->
         <template v-if="activeTab !== 'months'">
-          <!-- 汇总卡片 -->
           <div class="grid grid-cols-2 gap-4 lg:grid-cols-4" :class="data.cost_visible ? 'xl:grid-cols-6' : ''">
-            <div
-              v-for="card in summaryCards"
-              :key="card.key"
-              class="card relative overflow-hidden p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover"
-            >
-              <div class="flex items-start justify-between gap-2">
+            <div v-for="card in summaryCards" :key="card.key" class="card p-4">
+              <div class="flex items-center gap-3">
+                <div class="shrink-0 rounded-lg p-2" :class="card.iconBg">
+                  <Icon :name="card.icon" size="md" :class="card.iconColor" :stroke-width="2" />
+                </div>
                 <div class="min-w-0">
-                  <p class="truncate text-xs font-medium text-gray-500 dark:text-dark-400">{{ card.label }}</p>
-                  <p class="mt-1 truncate text-2xl font-bold tabular-nums text-gray-900 dark:text-white" :title="card.value">{{ card.value }}</p>
-                </div>
-                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-white shadow-lg" :class="card.gradient">
-                  <Icon :name="card.icon" size="md" />
+                  <p class="truncate text-xs font-medium text-gray-500 dark:text-gray-400">{{ card.label }}</p>
+                  <p class="truncate text-xl font-bold tabular-nums text-gray-900 dark:text-white" :title="card.title">{{ card.value }}</p>
+                  <p class="truncate text-xs text-gray-500 dark:text-gray-400">
+                    <template v-if="card.delta !== undefined">
+                      <span class="tabular-nums" :class="deltaClass(card.delta)">{{ formatGrowth(card.delta) }}</span>
+                      {{ card.deltaLabel }}
+                    </template>
+                    <template v-else>{{ card.hint || '&nbsp;' }}</template>
+                  </p>
                 </div>
               </div>
-              <div class="mt-2 flex h-5 min-w-0 items-center gap-1.5 text-xs">
-                <template v-if="card.delta !== undefined">
-                  <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold tabular-nums" :class="deltaChipClass(card.delta)">
-                    {{ formatGrowth(card.delta) }}
-                  </span>
-                  <span class="truncate text-gray-400 dark:text-dark-500">{{ card.deltaLabel }}</span>
-                </template>
-                <span v-else-if="card.hint" class="truncate text-gray-400 dark:text-dark-500">{{ card.hint }}</span>
-              </div>
-              <svg v-if="card.spark" class="mt-2 h-9 w-full" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true">
-                <defs>
-                  <linearGradient :id="`lb-spark-${card.key}`" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" :stop-color="card.color" stop-opacity="0.35" />
-                    <stop offset="100%" :stop-color="card.color" stop-opacity="0" />
-                  </linearGradient>
-                </defs>
-                <path :d="card.spark.area" :fill="`url(#lb-spark-${card.key})`" />
-                <path
-                  :d="card.spark.line"
-                  fill="none"
-                  :stroke="card.color"
-                  stroke-width="1.75"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  vector-effect="non-scaling-stroke"
-                />
-              </svg>
-              <div v-else class="mt-2 h-9" />
             </div>
           </div>
 
-          <div v-if="!period!.ranking.length" class="card p-10 text-center text-sm text-gray-500 dark:text-dark-400">
+          <div v-if="!ranking.length" class="card p-10 text-center text-sm text-gray-500 dark:text-dark-400">
             {{ t('modelLeaderboard.empty') }}
           </div>
 
           <template v-else>
-            <!-- 领奖台 Top 3：2-1-3 阶梯 -->
-            <div class="grid grid-cols-1 items-end gap-4 md:grid-cols-3">
-              <div
-                v-for="item in podium"
-                :key="item.model"
-                class="flex flex-col"
-                :class="medal(item.rank).order"
-              >
-                <div
-                  class="card relative overflow-hidden p-5 transition-all duration-300 hover:-translate-y-1"
-                  :class="medal(item.rank).card"
-                >
-                  <div class="absolute inset-x-0 top-0 h-1 bg-gradient-to-r" :class="medal(item.rank).bar" />
-                  <div class="pointer-events-none absolute -right-12 -top-12 h-36 w-36 rounded-full blur-2xl" :class="medal(item.rank).glow" />
-
-                  <div class="relative flex items-center gap-3">
-                    <div
-                      class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br text-white shadow-lg ring-4"
-                      :class="medal(item.rank).badge"
-                    >
-                      <Icon :name="item.rank === 1 ? 'trophy' : 'badge'" size="md" :stroke-width="2" />
-                    </div>
-                    <div class="min-w-0">
-                      <p class="text-xs font-bold uppercase tracking-wider" :class="medal(item.rank).text">
-                        {{ t(`modelLeaderboard.podium.${medal(item.rank).key}`) }}
-                      </p>
-                      <div class="mt-0.5 flex min-w-0 items-center gap-1.5">
-                        <ModelIcon :model="item.model" size="18px" />
-                        <p class="truncate text-base font-semibold text-gray-900 dark:text-white" :title="item.model">{{ item.model }}</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <p class="relative mt-4 text-3xl font-black tabular-nums tracking-tight text-gray-900 dark:text-white">
-                    {{ formatInt(item.requests) }}
-                    <span class="text-sm font-normal text-gray-500 dark:text-dark-400">{{ t('modelLeaderboard.metric.requests') }}</span>
+            <!-- 前三名 -->
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div v-for="item in top3" :key="item.model" class="card p-4">
+                <div class="flex items-center gap-2.5">
+                  <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold" :class="rankBadgeClass(item.rank)">
+                    {{ item.rank }}
+                  </span>
+                  <ModelIcon :model="item.model" size="18px" />
+                  <p class="min-w-0 flex-1 truncate text-sm font-semibold text-gray-900 dark:text-white" :title="item.model">{{ item.model }}</p>
+                  <RankMove :item="item" />
+                </div>
+                <div class="mt-3 flex items-baseline justify-between gap-2">
+                  <p class="text-xl font-bold tabular-nums text-gray-900 dark:text-white" :title="formatInt(metricOf(item))">
+                    {{ formatMetric(metricOf(item)) }}
+                    <span class="text-xs font-normal text-gray-500 dark:text-gray-400">{{ metricLabel }}</span>
                   </p>
-                  <div class="relative mt-2 h-2 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700">
-                    <div class="h-full rounded-full bg-gradient-to-r" :class="medal(item.rank).bar" :style="{ width: pct(item.request_share) }" />
-                  </div>
-                  <div class="relative mt-3 grid grid-cols-3 gap-2 text-center">
-                    <div class="rounded-lg bg-gray-50 px-2 py-1.5 dark:bg-dark-800/70">
-                      <p class="text-[10px] text-gray-400 dark:text-dark-500">{{ t('modelLeaderboard.table.share') }}</p>
-                      <p class="text-sm font-semibold tabular-nums text-gray-800 dark:text-dark-100">{{ pct(item.request_share) }}</p>
-                    </div>
-                    <div class="rounded-lg bg-gray-50 px-2 py-1.5 dark:bg-dark-800/70">
-                      <p class="text-[10px] text-gray-400 dark:text-dark-500">Tokens</p>
-                      <p class="text-sm font-semibold tabular-nums text-gray-800 dark:text-dark-100">{{ formatCompactNumber(item.total_tokens) }}</p>
-                    </div>
-                    <div class="rounded-lg bg-gray-50 px-2 py-1.5 dark:bg-dark-800/70">
-                      <p class="text-[10px] text-gray-400 dark:text-dark-500">{{ t('modelLeaderboard.table.users') }}</p>
-                      <p class="text-sm font-semibold tabular-nums text-gray-800 dark:text-dark-100">{{ formatInt(item.users) }}</p>
-                    </div>
-                  </div>
-                  <div class="relative mt-3 flex justify-end">
-                    <RankMove :item="item" show-growth />
-                  </div>
+                  <span class="text-sm tabular-nums text-gray-500 dark:text-gray-400">{{ pct(shareOf(item)) }}</span>
                 </div>
-                <div
-                  class="mx-3 hidden items-center justify-center rounded-b-xl bg-gradient-to-b text-2xl font-black text-white/90 shadow-inner md:flex"
-                  :class="medal(item.rank).pedestal"
-                >
-                  {{ item.rank }}
+                <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700">
+                  <div class="h-full rounded-full bg-primary-500" :style="{ width: pct(shareOf(item)) }" />
                 </div>
+                <p class="mt-2 truncate text-xs text-gray-500 dark:text-gray-400">
+                  {{ tieLabel }} {{ metric === 'tokens' ? formatInt(item.requests) : formatCompactNumber(item.total_tokens) }}
+                  · {{ t('modelLeaderboard.table.users') }} {{ formatInt(item.users) }}
+                </p>
               </div>
             </div>
 
-            <!-- 图表区 -->
-            <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-              <div class="card p-5">
-                <div class="mb-4 flex items-center gap-2">
-                  <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-100 text-primary-600 dark:bg-primary-900/40 dark:text-primary-300"><Icon name="chart" size="sm" /></span>
-                  <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('modelLeaderboard.charts.share') }}</h3>
-                </div>
-                <div class="relative mx-auto h-48 max-w-[12rem]">
-                  <Doughnut :data="shareChart" :options="doughnutOptions" />
-                  <div class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                    <span class="text-xl font-black tabular-nums text-gray-900 dark:text-white">{{ formatCompactNumber(period!.summary.requests) }}</span>
-                    <span class="text-[11px] text-gray-400 dark:text-dark-500">{{ t('modelLeaderboard.charts.totalRequests') }}</span>
+            <!-- 图表 -->
+            <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <div class="card p-4">
+                <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">{{ t('modelLeaderboard.charts.share', { metric: metricLabel }) }}</h3>
+                <div class="flex flex-col items-center gap-4 sm:flex-row sm:gap-6">
+                  <div class="h-48 w-48 shrink-0">
+                    <Doughnut :data="shareChart" :options="doughnutOptions" />
+                  </div>
+                  <div class="max-h-48 w-full min-w-0 flex-1 overflow-auto">
+                    <table class="w-full text-xs">
+                      <tbody>
+                        <tr v-for="seg in shareLegend" :key="seg.label" class="border-t border-gray-100 first:border-t-0 dark:border-dark-700">
+                          <td class="py-1.5 pr-2">
+                            <div class="flex min-w-0 items-center gap-2">
+                              <span class="h-2.5 w-2.5 shrink-0 rounded-full" :style="{ background: seg.color }" />
+                              <span class="truncate text-gray-700 dark:text-gray-300" :title="seg.label">{{ seg.label }}</span>
+                            </div>
+                          </td>
+                          <td class="py-1.5 text-right tabular-nums text-gray-600 dark:text-gray-400">{{ formatMetric(seg.value) }}</td>
+                          <td class="w-14 py-1.5 text-right tabular-nums text-gray-900 dark:text-white">{{ pct(seg.share) }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
                   </div>
                 </div>
-                <ul class="mt-4 space-y-1.5">
-                  <li v-for="seg in shareLegend" :key="seg.label" class="flex items-center gap-2 text-xs">
-                    <span class="h-2.5 w-2.5 shrink-0 rounded-full" :style="{ background: seg.color }" />
-                    <span class="min-w-0 flex-1 truncate text-gray-600 dark:text-dark-300" :title="seg.label">{{ seg.label }}</span>
-                    <span class="tabular-nums font-medium text-gray-900 dark:text-white">{{ pct(seg.share) }}</span>
-                  </li>
-                </ul>
               </div>
-              <div class="card p-5 lg:col-span-2">
-                <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
-                  <div class="flex items-center gap-2">
-                    <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-300"><Icon name="chartBar" size="sm" /></span>
-                    <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('modelLeaderboard.charts.topBar') }}</h3>
-                  </div>
-                  <div class="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 dark:border-dark-700 dark:bg-dark-800">
-                    <button
-                      v-for="m in barMetrics"
-                      :key="m"
-                      type="button"
-                      class="rounded-md px-2.5 py-1 text-xs font-medium transition-colors"
-                      :class="barMetric === m ? activeSegClass : idleSegClass"
-                      @click="barMetric = m"
-                    >
-                      {{ t(`modelLeaderboard.metric.${m}`) }}
-                    </button>
-                  </div>
-                </div>
-                <div class="h-80">
+              <div class="card p-4">
+                <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">{{ t('modelLeaderboard.charts.topBar', { metric: metricLabel }) }}</h3>
+                <div class="h-64">
                   <Bar :data="topBarChart" :options="hBarOptions" />
                 </div>
               </div>
             </div>
 
             <div class="grid grid-cols-1 gap-6 xl:grid-cols-3">
-              <div class="card p-5 xl:col-span-2">
-                <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
-                  <div class="flex items-center gap-2">
-                    <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-300"><Icon name="trendingUp" size="sm" /></span>
-                    <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
-                      {{ activeTab === 'monthly' ? t('modelLeaderboard.charts.trendDaily') : t('modelLeaderboard.charts.trendMonthly') }}
-                    </h3>
-                  </div>
-                  <div class="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 dark:border-dark-700 dark:bg-dark-800">
-                    <button
-                      v-for="m in trendMetrics"
-                      :key="m"
-                      type="button"
-                      class="rounded-md px-2.5 py-1 text-xs font-medium transition-colors"
-                      :class="trendMetric === m ? activeSegClass : idleSegClass"
-                      @click="trendMetric = m"
-                    >
-                      {{ t(`modelLeaderboard.metric.${m}`) }}
-                    </button>
-                  </div>
-                </div>
+              <div class="card p-4 xl:col-span-2">
+                <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">
+                  {{ t(activeTab === 'monthly' ? 'modelLeaderboard.charts.trendDaily' : 'modelLeaderboard.charts.trendMonthly', { metric: metricLabel }) }}
+                </h3>
                 <div class="h-72">
                   <Bar :data="trendChart" :options="stackedOptions" />
                 </div>
               </div>
-              <div class="card p-5">
-                <div class="mb-4 flex items-center gap-2">
-                  <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-cyan-100 text-cyan-600 dark:bg-cyan-900/40 dark:text-cyan-300"><Icon name="database" size="sm" /></span>
-                  <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('modelLeaderboard.charts.tokenMix') }}</h3>
-                </div>
+              <div class="card p-4">
+                <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">{{ t('modelLeaderboard.charts.tokenMix') }}</h3>
                 <div class="h-72">
                   <Bar :data="tokenMixChart" :options="tokenMixOptions" />
                 </div>
               </div>
             </div>
 
-            <!-- 完整排行表 -->
+            <!-- 完整排行 -->
             <div class="card overflow-hidden">
-              <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-5 py-3.5 dark:border-dark-700">
-                <div class="flex items-center gap-2">
-                  <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-900/40 dark:text-rose-300"><Icon name="fire" size="sm" /></span>
-                  <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
-                    {{ t('modelLeaderboard.table.title') }}
-                    <span class="ml-1 text-xs font-normal text-gray-400">({{ filteredRanking.length }})</span>
-                  </h3>
-                </div>
-                <div class="relative">
-                  <Icon name="search" size="sm" class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                  <input
-                    v-model.trim="keyword"
-                    type="search"
-                    class="input h-8 w-52 py-0 pl-8 text-sm"
-                    :placeholder="t('modelLeaderboard.table.search')"
-                  />
+              <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-4 py-3 dark:border-dark-700">
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
+                  {{ t('modelLeaderboard.table.title') }}
+                  <span class="ml-1 text-xs font-normal text-gray-400">({{ filteredRanking.length }})</span>
+                </h3>
+                <div class="w-56">
+                  <SearchInput v-model="keyword" :placeholder="t('modelLeaderboard.table.search')" :debounce-ms="0" />
                 </div>
               </div>
               <div class="overflow-x-auto">
                 <table class="w-full min-w-[1000px] text-sm">
-                  <thead class="bg-gray-50/80 text-xs text-gray-500 dark:bg-dark-800/80 dark:text-dark-400">
+                  <thead class="bg-gray-50 text-xs text-gray-500 dark:bg-dark-800/50 dark:text-gray-400">
                     <tr>
                       <th
                         v-for="col in columns"
                         :key="col.key"
-                        class="whitespace-nowrap px-3 py-2.5 font-medium"
-                        :class="[col.align === 'left' ? 'text-left' : 'text-right', col.sortable ? 'cursor-pointer select-none hover:text-gray-900 dark:hover:text-white' : '']"
-                        @click="col.sortable && toggleSort(col.key)"
+                        class="cursor-pointer select-none whitespace-nowrap px-3 py-2.5 font-medium hover:text-gray-900 dark:hover:text-white"
+                        :class="[col.left ? 'text-left' : 'text-right', col.key === metricColumn ? 'text-gray-900 dark:text-white' : '']"
+                        @click="toggleSort(col.key)"
                       >
                         {{ col.label }}
                         <span v-if="sortKey === col.key" class="text-primary-500">{{ sortDesc ? '↓' : '↑' }}</span>
@@ -362,46 +206,38 @@
                     </tr>
                   </thead>
                   <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
-                    <tr
-                      v-for="row in filteredRanking"
-                      :key="row.model"
-                      class="transition-colors hover:bg-gray-50 dark:hover:bg-dark-800/60"
-                      :class="rowHighlight(row.rank)"
-                    >
-                      <td class="px-3 py-2.5 text-left tabular-nums">
-                        <span
-                          v-if="row.rank <= 3"
-                          class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br text-xs font-black text-white shadow-md ring-2 ring-white dark:ring-dark-800"
-                          :class="medal(row.rank).badge"
-                        >{{ row.rank }}</span>
-                        <span v-else class="inline-flex h-7 w-7 items-center justify-center text-xs font-semibold text-gray-400 dark:text-dark-500">{{ row.rank }}</span>
+                    <tr v-for="row in filteredRanking" :key="row.model" class="transition-colors hover:bg-gray-50 dark:hover:bg-dark-800/30">
+                      <td class="px-3 py-2.5 text-left">
+                        <span class="inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold tabular-nums" :class="rankBadgeClass(row.rank)">
+                          {{ row.rank }}
+                        </span>
                       </td>
                       <td class="max-w-[260px] px-3 py-2.5 text-left">
                         <div class="flex items-center gap-2">
-                          <ModelIcon :model="row.model" size="18px" />
-                          <span class="truncate text-gray-900 dark:text-white" :class="row.rank <= 3 ? 'font-semibold' : 'font-medium'" :title="row.model">{{ row.model }}</span>
+                          <ModelIcon :model="row.model" size="16px" />
+                          <span class="truncate font-medium text-gray-900 dark:text-white" :title="row.model">{{ row.model }}</span>
                         </div>
                       </td>
-                      <td class="px-3 py-2.5 text-right font-semibold tabular-nums text-gray-900 dark:text-white">{{ formatInt(row.requests) }}</td>
+                      <td class="px-3 py-2.5 text-right tabular-nums" :class="cellClass('requests')">{{ formatInt(row.requests) }}</td>
+                      <td class="px-3 py-2.5 text-right tabular-nums" :class="cellClass('total_tokens')" :title="formatInt(row.total_tokens)">{{ formatCompactNumber(row.total_tokens) }}</td>
                       <td class="px-3 py-2.5 text-right">
                         <div class="flex items-center justify-end gap-2">
-                          <div class="h-2 w-24 overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700">
-                            <div class="h-full rounded-full" :style="{ width: pct(row.request_share), background: barGradient(row.model) }" />
+                          <div class="h-1.5 w-20 overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700">
+                            <div class="h-full rounded-full bg-primary-500" :style="{ width: pct(shareOf(row)) }" />
                           </div>
-                          <span class="w-12 tabular-nums text-gray-600 dark:text-dark-300">{{ pct(row.request_share) }}</span>
+                          <span class="w-12 tabular-nums text-gray-600 dark:text-gray-400">{{ pct(shareOf(row)) }}</span>
                         </div>
                       </td>
-                      <td class="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-dark-300" :title="formatInt(row.total_tokens)">{{ formatCompactNumber(row.total_tokens) }}</td>
-                      <td class="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-dark-400">{{ formatCompactNumber(row.input_tokens) }}</td>
-                      <td class="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-dark-400">{{ formatCompactNumber(row.output_tokens) }}</td>
-                      <td class="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-dark-400">{{ pct(row.cache_hit_rate) }}</td>
-                      <td class="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-dark-300">{{ formatInt(row.users) }}</td>
-                      <td class="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-dark-400">{{ formatMs(row.avg_duration_ms) }}</td>
-                      <td class="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-dark-400">{{ formatMs(row.avg_first_token_ms) }}</td>
+                      <td class="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400">{{ formatCompactNumber(row.input_tokens) }}</td>
+                      <td class="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400">{{ formatCompactNumber(row.output_tokens) }}</td>
+                      <td class="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400">{{ pct(row.cache_hit_rate) }}</td>
+                      <td class="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-gray-400">{{ formatInt(row.users) }}</td>
+                      <td class="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400">{{ formatMs(row.avg_duration_ms) }}</td>
+                      <td class="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400">{{ formatMs(row.avg_first_token_ms) }}</td>
                       <td class="px-3 py-2.5 text-right"><RankMove :item="row" show-growth /></td>
                       <td v-if="data.cost_visible" class="px-3 py-2.5 text-right tabular-nums text-green-600 dark:text-green-400">${{ formatMoney(row.actual_cost) }}</td>
-                      <td v-if="data.cost_visible" class="px-3 py-2.5 text-right tabular-nums text-gray-400 dark:text-dark-500">${{ formatMoney(row.cost) }}</td>
-                      <td class="whitespace-nowrap px-3 py-2.5 text-right text-xs text-gray-500 dark:text-dark-400">{{ shortTime(row.last_used_at) }}</td>
+                      <td v-if="data.cost_visible" class="px-3 py-2.5 text-right tabular-nums text-gray-400 dark:text-gray-500">${{ formatMoney(row.cost) }}</td>
+                      <td class="whitespace-nowrap px-3 py-2.5 text-right text-xs text-gray-500 dark:text-gray-400">{{ shortTime(row.last_used_at) }}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -412,28 +248,24 @@
 
         <!-- ============ 月度明细 ============ -->
         <template v-else>
-          <div class="card p-5">
-            <div class="mb-4 flex items-center gap-2">
-              <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-100 text-primary-600 dark:bg-primary-900/40 dark:text-primary-300"><Icon name="trendingUp" size="sm" /></span>
-              <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('modelLeaderboard.charts.trendMonthly') }}</h3>
-            </div>
+          <div class="card p-4">
+            <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">{{ t('modelLeaderboard.charts.trendMonthly', { metric: metricLabel }) }}</h3>
             <div class="h-72">
               <Bar :data="monthTotalsChart" :options="monthTotalsOptions" />
             </div>
           </div>
           <div class="card overflow-hidden">
-            <div class="flex items-center gap-2 border-b border-gray-100 px-5 py-3.5 dark:border-dark-700">
-              <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-300"><Icon name="calendar" size="sm" /></span>
+            <div class="border-b border-gray-100 px-4 py-3 dark:border-dark-700">
               <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('modelLeaderboard.months.title') }}</h3>
             </div>
             <div class="overflow-x-auto">
               <table class="w-full min-w-[820px] text-sm">
-                <thead class="bg-gray-50/80 text-xs text-gray-500 dark:bg-dark-800/80 dark:text-dark-400">
+                <thead class="bg-gray-50 text-xs text-gray-500 dark:bg-dark-800/50 dark:text-gray-400">
                   <tr>
                     <th class="px-3 py-2.5 text-left font-medium">{{ t('modelLeaderboard.months.month') }}</th>
-                    <th class="px-3 py-2.5 text-right font-medium">{{ t('modelLeaderboard.table.requests') }}</th>
+                    <th class="px-3 py-2.5 text-right font-medium" :class="metric === 'requests' ? 'text-gray-900 dark:text-white' : ''">{{ t('modelLeaderboard.table.requests') }}</th>
+                    <th class="px-3 py-2.5 text-right font-medium" :class="metric === 'tokens' ? 'text-gray-900 dark:text-white' : ''">{{ t('modelLeaderboard.table.tokens') }}</th>
                     <th class="px-3 py-2.5 text-right font-medium">{{ t('modelLeaderboard.table.growth') }}</th>
-                    <th class="px-3 py-2.5 text-right font-medium">{{ t('modelLeaderboard.table.tokens') }}</th>
                     <th class="px-3 py-2.5 text-right font-medium">{{ t('modelLeaderboard.summary.users') }}</th>
                     <th class="px-3 py-2.5 text-right font-medium">{{ t('modelLeaderboard.summary.models') }}</th>
                     <th class="px-3 py-2.5 text-left font-medium">{{ t('modelLeaderboard.months.topModel') }}</th>
@@ -446,41 +278,24 @@
                   <tr
                     v-for="(row, i) in data.month_rows"
                     :key="row.month"
-                    class="group cursor-pointer transition-colors hover:bg-primary-50/60 dark:hover:bg-primary-900/10"
+                    class="cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-dark-800/30"
                     @click="openMonth(row.month)"
                   >
-                    <td class="whitespace-nowrap px-3 py-2.5">
-                      <span class="font-semibold text-primary-600 group-hover:underline dark:text-primary-400">{{ row.month }}</span>
-                      <span
-                        v-if="row.month === peakMonth"
-                        class="ml-2 inline-flex items-center gap-0.5 rounded-full bg-gradient-to-r from-amber-400 to-orange-500 px-1.5 py-0.5 align-middle text-[10px] font-bold text-white shadow-sm shadow-orange-500/30"
-                      >
-                        <Icon name="fire" size="xs" :stroke-width="2" />{{ t('modelLeaderboard.months.peak') }}
-                      </span>
-                    </td>
-                    <td class="px-3 py-2.5 text-right">
-                      <div class="flex items-center justify-end gap-2">
-                        <div class="hidden h-1.5 w-20 overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700 sm:block">
-                          <div class="h-full rounded-full bg-gradient-to-r from-primary-400 to-primary-600" :style="{ width: pct(monthMaxRequests ? row.requests / monthMaxRequests : 0) }" />
-                        </div>
-                        <span class="font-semibold tabular-nums text-gray-900 dark:text-white">{{ formatInt(row.requests) }}</span>
-                      </div>
-                    </td>
-                    <td class="px-3 py-2.5 text-right">
-                      <span class="rounded-full px-1.5 py-0.5 text-[11px] font-semibold tabular-nums" :class="deltaChipClass(monthGrowth(i))">{{ formatGrowth(monthGrowth(i)) }}</span>
-                    </td>
-                    <td class="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-dark-300">{{ formatCompactNumber(row.total_tokens) }}</td>
-                    <td class="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-dark-300">{{ formatInt(row.users) }}</td>
-                    <td class="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-dark-300">{{ formatInt(row.models) }}</td>
+                    <td class="whitespace-nowrap px-3 py-2.5 font-medium text-primary-600 hover:underline dark:text-primary-400">{{ row.month }}</td>
+                    <td class="px-3 py-2.5 text-right tabular-nums" :class="cellClass('requests')">{{ formatInt(row.requests) }}</td>
+                    <td class="px-3 py-2.5 text-right tabular-nums" :class="cellClass('total_tokens')" :title="formatInt(row.total_tokens)">{{ formatCompactNumber(row.total_tokens) }}</td>
+                    <td class="px-3 py-2.5 text-right tabular-nums" :class="deltaClass(monthGrowth(i))">{{ formatGrowth(monthGrowth(i)) }}</td>
+                    <td class="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-gray-400">{{ formatInt(row.users) }}</td>
+                    <td class="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-gray-400">{{ formatInt(row.models) }}</td>
                     <td class="max-w-[220px] px-3 py-2.5">
                       <div class="flex items-center gap-2">
                         <ModelIcon v-if="row.top_model" :model="row.top_model" size="16px" />
-                        <span class="truncate font-medium text-gray-900 dark:text-white" :title="row.top_model">{{ row.top_model || '-' }}</span>
+                        <span class="truncate text-gray-900 dark:text-white" :title="row.top_model">{{ row.top_model || '-' }}</span>
                       </div>
                     </td>
-                    <td class="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-dark-400">{{ pct(row.top_model_share) }}</td>
+                    <td class="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400">{{ pct(row.top_model_share) }}</td>
                     <td v-if="data.cost_visible" class="px-3 py-2.5 text-right tabular-nums text-green-600 dark:text-green-400">${{ formatMoney(row.actual_cost) }}</td>
-                    <td v-if="data.cost_visible" class="px-3 py-2.5 text-right tabular-nums text-gray-400 dark:text-dark-500">${{ formatMoney(row.cost) }}</td>
+                    <td v-if="data.cost_visible" class="px-3 py-2.5 text-right tabular-nums text-gray-400 dark:text-gray-500">${{ formatMoney(row.cost) }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -489,7 +304,7 @@
         </template>
 
         <p class="text-xs text-gray-400 dark:text-dark-500">
-          {{ t('modelLeaderboard.footnote', { tz: data.timezone }) }} · {{ shortTime(data.generated_at) }}
+          {{ t('modelLeaderboard.footnote', { tz: data.timezone, metric: metricLabel, tie: tieLabel }) }} · {{ shortTime(data.generated_at) }}
         </p>
       </template>
     </div>
@@ -513,11 +328,14 @@ import { Bar, Doughnut } from 'vue-chartjs'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import ModelIcon from '@/components/common/ModelIcon.vue'
+import SearchInput from '@/components/common/SearchInput.vue'
+import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { formatCompactNumber } from '@/utils/format'
 import {
   getModelLeaderboard,
   LEADERBOARD_OTHER,
+  type LeaderboardMetric,
   type LeaderboardRankItem,
   type LeaderboardSource,
   type ModelLeaderboardResponse
@@ -526,30 +344,27 @@ import {
 ChartJS.register(ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend)
 
 type Tab = 'monthly' | 'allTime' | 'months'
-type Metric = 'requests' | 'tokens' | 'users'
 type IconName = InstanceType<typeof Icon>['$props']['name']
 
 const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
 
-const activeSegClass = 'bg-white text-gray-900 shadow-sm dark:bg-dark-700 dark:text-white'
-const idleSegClass = 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
-const heroActiveClass = 'bg-white text-primary-700 shadow-md'
-const heroIdleClass = 'text-white/80 hover:bg-white/10 hover:text-white'
+const segWrapClass = 'inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 dark:border-dark-700 dark:bg-dark-800'
+const segBtnClass = 'rounded-md px-3 py-1 text-sm font-medium transition-colors'
+const segActiveClass = 'bg-white text-gray-900 shadow-sm dark:bg-dark-700 dark:text-white'
+const segIdleClass = 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
 
 const sources: LeaderboardSource[] = ['requested', 'upstream']
-const barMetrics: Metric[] = ['requests', 'tokens', 'users']
-const trendMetrics: Metric[] = ['requests', 'tokens']
+const metrics: LeaderboardMetric[] = ['requests', 'tokens']
 
 const initialTab = (['monthly', 'allTime', 'months'] as Tab[]).includes(route.query.tab as Tab)
   ? (route.query.tab as Tab)
   : 'monthly'
 const activeTab = ref<Tab>(initialTab)
 const source = ref<LeaderboardSource>(route.query.source === 'upstream' ? 'upstream' : 'requested')
+const metric = ref<LeaderboardMetric>(route.query.metric === 'tokens' ? 'tokens' : 'requests')
 const month = ref<string>(typeof route.query.month === 'string' ? route.query.month : '')
-const barMetric = ref<Metric>('requests')
-const trendMetric = ref<Metric>('requests')
 const keyword = ref('')
 const sortKey = ref<string>('rank')
 const sortDesc = ref(false)
@@ -565,14 +380,14 @@ const loading = ref(false)
 const loadFailed = ref(false)
 let controller: AbortController | null = null
 
-async function load(_force = false) {
+async function load() {
   controller?.abort()
   controller = new AbortController()
   loading.value = true
   loadFailed.value = false
   try {
     const resp = await getModelLeaderboard(
-      { source: source.value, month: month.value || undefined },
+      { source: source.value, month: month.value || undefined, metric: metric.value },
       { signal: controller.signal }
     )
     data.value = resp
@@ -591,24 +406,59 @@ function setSource(s: LeaderboardSource) {
   load()
 }
 
+function setMetric(m: LeaderboardMetric) {
+  if (metric.value === m) return
+  metric.value = m
+  sortKey.value = 'rank'
+  sortDesc.value = false
+  load()
+}
+
 function openMonth(m: string) {
   month.value = m
   activeTab.value = 'monthly'
   load()
 }
 
-watch([activeTab, source, month], () => {
+watch([activeTab, source, metric, month], () => {
   const query: Record<string, string> = { ...(route.query as Record<string, string>) }
   query.tab = activeTab.value
   query.source = source.value
+  query.metric = metric.value
   if (month.value) query.month = month.value
   router.replace({ query }).catch(() => {})
 })
 
 onMounted(() => load())
 
-const monthOptions = computed(() => data.value?.months ?? [])
+const monthOptions = computed(() => (data.value?.months ?? []).map((m) => ({ value: m, label: m })))
 const period = computed(() => (activeTab.value === 'allTime' ? data.value?.all_time : data.value?.monthly))
+const ranking = computed(() => period.value?.ranking ?? [])
+const top3 = computed(() => ranking.value.slice(0, 3))
+
+// ---------- 统计口径 ----------
+const isTokens = computed(() => metric.value === 'tokens')
+const metricLabel = computed(() => t(`modelLeaderboard.metric.${metric.value}`))
+const tieLabel = computed(() => t(`modelLeaderboard.metric.${isTokens.value ? 'requests' : 'tokens'}`))
+const metricColumn = computed(() => (isTokens.value ? 'total_tokens' : 'requests'))
+
+function metricOf(r: { requests: number; total_tokens: number }) {
+  return isTokens.value ? r.total_tokens : r.requests
+}
+function shareOf(r: LeaderboardRankItem) {
+  return isTokens.value ? r.token_share : r.request_share
+}
+function growthOfItem(r: LeaderboardRankItem) {
+  return isTokens.value ? r.tokens_growth : r.requests_growth
+}
+function formatMetric(v: number) {
+  return isTokens.value ? formatCompactNumber(v) : formatInt(v)
+}
+function cellClass(col: string) {
+  return col === metricColumn.value
+    ? 'font-semibold text-gray-900 dark:text-white'
+    : 'text-gray-600 dark:text-gray-400'
+}
 
 // ---------- 格式化 ----------
 const intFmt = computed(() => new Intl.NumberFormat(locale.value === 'zh' ? 'zh-CN' : 'en-US'))
@@ -634,14 +484,8 @@ function formatGrowth(g: number | null | undefined) {
   return `${sign}${(g * 100).toFixed(1)}%`
 }
 function deltaClass(g: number | null | undefined) {
-  if (g === null || g === undefined || g === 0) return 'text-gray-400 dark:text-dark-500'
-  return g > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
-}
-function deltaChipClass(g: number | null | undefined) {
-  if (g === null || g === undefined || g === 0) return 'bg-gray-100 text-gray-500 dark:bg-dark-700 dark:text-dark-400'
-  return g > 0
-    ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400'
-    : 'bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-400'
+  if (g === null || g === undefined || g === 0) return 'text-gray-400 dark:text-gray-500'
+  return g > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
 }
 function shortTime(iso: string | undefined) {
   if (!iso) return '-'
@@ -654,19 +498,15 @@ function growthOf(cur: number, prev: number | undefined): number | null {
   if (prev === undefined || prev <= 0) return null
   return (cur - prev) / prev
 }
+function rankBadgeClass(rank: number) {
+  if (rank === 1) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+  if (rank === 2) return 'bg-gray-200 text-gray-700 dark:bg-dark-600 dark:text-gray-200'
+  if (rank === 3) return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
+  return 'text-gray-500 dark:text-gray-400'
+}
 
-// ---------- Hero ----------
-const heroPeriod = computed(() => (activeTab.value === 'months' ? data.value?.all_time : period.value))
-const champion = computed(() => heroPeriod.value?.ranking[0])
-const runnerUp = computed(() => heroPeriod.value?.ranking[1])
-const championTitle = computed(() => {
-  if (activeTab.value !== 'monthly') return t('modelLeaderboard.hero.allTimeChampion')
-  return data.value?.is_current
-    ? t('modelLeaderboard.hero.currentChampion')
-    : t('modelLeaderboard.hero.monthChampion', { month: data.value?.month ?? '' })
-})
 const periodCaption = computed(() => {
-  const p = heroPeriod.value
+  const p = activeTab.value === 'months' ? data.value?.all_time : period.value
   if (!p) return ''
   const start = (p.summary.first_at || p.start || '').slice(0, 10)
   const end = (activeTab.value === 'monthly' ? p.end : p.summary.last_at || p.end || '').slice(0, 10)
@@ -674,90 +514,62 @@ const periodCaption = computed(() => {
 })
 
 // ---------- 汇总卡片 ----------
-function sparkPaths(values: number[] | undefined, w = 120, hgt = 32) {
-  if (!values || values.length < 2 || values.every((v) => v === 0)) return undefined
-  const max = Math.max(...values)
-  const min = Math.min(...values)
-  const span = max - min || 1
-  const step = w / (values.length - 1)
-  const pts = values.map((v, i) => [i * step, hgt - 2 - ((v - min) / span) * (hgt - 6)])
-  const line = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
-  return { line, area: `${line} L${w},${hgt} L0,${hgt} Z` }
-}
-
-const trendTotals = computed(() => {
-  const s = period.value?.trend
-  if (!s) return { requests: [] as number[], tokens: [] as number[] }
-  const sum = (key: 'requests' | 'tokens') =>
-    (s.labels ?? []).map((_, i) => (s.datasets ?? []).reduce((a, d) => a + (d[key][i] ?? 0), 0))
-  return { requests: sum('requests'), tokens: sum('tokens') }
-})
-
-const monthSeries = computed(() => [...(data.value?.month_rows ?? [])].reverse())
-
 type SummaryCard = {
   key: string
   label: string
   value: string
+  title?: string
   icon: IconName
-  gradient: string
-  color: string
+  iconBg: string
+  iconColor: string
   delta?: number | null
   deltaLabel?: string
   hint?: string
-  spark?: { line: string; area: string }
 }
 
 const summaryCards = computed<SummaryCard[]>(() => {
   const p = period.value
   if (!p || !data.value) return []
   const s = p.summary
-  const allTime = activeTab.value === 'allTime'
   const prev = activeTab.value === 'monthly' ? p.prev : undefined
   const deltaLabel = data.value.is_current ? t('modelLeaderboard.summary.vsPrev') : t('modelLeaderboard.summary.vsPrevMonth')
-  const hint = allTime && s.first_at
+  const hint = activeTab.value === 'allTime' && s.first_at
     ? t('modelLeaderboard.summary.since', { date: s.first_at.slice(0, 10) })
     : undefined
-  const ms = monthSeries.value
+  const delta = (cur: number, before: number | undefined) => (prev ? growthOf(cur, before) : undefined)
   const cards: SummaryCard[] = [
     {
       key: 'req', label: t('modelLeaderboard.summary.requests'), value: formatInt(s.requests),
-      icon: 'chart', gradient: 'from-primary-500 to-primary-600 shadow-primary-500/30', color: '#14b8a6',
-      delta: prev ? growthOf(s.requests, prev.requests) : undefined, deltaLabel, hint,
-      spark: sparkPaths(trendTotals.value.requests)
+      icon: 'chart', iconBg: 'bg-blue-100 dark:bg-blue-900/30', iconColor: 'text-blue-600 dark:text-blue-400',
+      delta: delta(s.requests, prev?.requests), deltaLabel, hint
     },
     {
-      key: 'tok', label: t('modelLeaderboard.summary.tokens'), value: formatCompactNumber(s.total_tokens),
-      icon: 'database', gradient: 'from-indigo-500 to-violet-600 shadow-indigo-500/30', color: '#6366f1',
-      delta: prev ? growthOf(s.total_tokens, prev.total_tokens) : undefined, deltaLabel, hint,
-      spark: sparkPaths(trendTotals.value.tokens)
+      key: 'tok', label: t('modelLeaderboard.summary.tokens'), value: formatCompactNumber(s.total_tokens), title: formatInt(s.total_tokens),
+      icon: 'database', iconBg: 'bg-amber-100 dark:bg-amber-900/30', iconColor: 'text-amber-600 dark:text-amber-400',
+      delta: delta(s.total_tokens, prev?.total_tokens), deltaLabel, hint
     },
     {
       key: 'usr', label: t('modelLeaderboard.summary.users'), value: formatInt(s.users),
-      icon: 'users', gradient: 'from-amber-400 to-orange-500 shadow-orange-500/30', color: '#f59e0b',
-      delta: prev ? growthOf(s.users, prev.users) : undefined, deltaLabel, hint,
-      spark: allTime ? sparkPaths(ms.map((r) => r.users)) : undefined
+      icon: 'users', iconBg: 'bg-emerald-100 dark:bg-emerald-900/30', iconColor: 'text-emerald-600 dark:text-emerald-400',
+      delta: delta(s.users, prev?.users), deltaLabel, hint
     },
     {
       key: 'mdl', label: t('modelLeaderboard.summary.models'), value: formatInt(s.models),
-      icon: 'cube', gradient: 'from-pink-500 to-rose-500 shadow-rose-500/30', color: '#ec4899',
-      delta: prev ? growthOf(s.models, prev.models) : undefined, deltaLabel, hint,
-      spark: allTime ? sparkPaths(ms.map((r) => r.models)) : undefined
+      icon: 'cube', iconBg: 'bg-purple-100 dark:bg-purple-900/30', iconColor: 'text-purple-600 dark:text-purple-400',
+      delta: delta(s.models, prev?.models), deltaLabel, hint
     }
   ]
   if (data.value.cost_visible) {
     cards.push(
       {
         key: 'act', label: t('modelLeaderboard.summary.actualCost'), value: `$${formatMoney(s.actual_cost)}`,
-        icon: 'dollar', gradient: 'from-emerald-500 to-green-600 shadow-emerald-500/30', color: '#10b981',
-        delta: prev ? growthOf(s.actual_cost ?? 0, prev.actual_cost) : undefined, deltaLabel, hint,
-        spark: allTime ? sparkPaths(ms.map((r) => r.actual_cost ?? 0)) : undefined
+        icon: 'dollar', iconBg: 'bg-green-100 dark:bg-green-900/30', iconColor: 'text-green-600 dark:text-green-400',
+        delta: delta(s.actual_cost ?? 0, prev?.actual_cost), deltaLabel, hint
       },
       {
         key: 'std', label: t('modelLeaderboard.summary.cost'), value: `$${formatMoney(s.cost)}`,
-        icon: 'creditCard', gradient: 'from-sky-500 to-blue-600 shadow-blue-500/30', color: '#3b82f6',
-        delta: prev ? growthOf(s.cost ?? 0, prev.cost) : undefined, deltaLabel, hint,
-        spark: allTime ? sparkPaths(ms.map((r) => r.cost ?? 0)) : undefined
+        icon: 'creditCard', iconBg: 'bg-gray-100 dark:bg-dark-700', iconColor: 'text-gray-600 dark:text-gray-300',
+        delta: delta(s.cost ?? 0, prev?.cost), deltaLabel, hint
       }
     )
   }
@@ -765,7 +577,7 @@ const summaryCards = computed<SummaryCard[]>(() => {
 })
 
 // ---------- 颜色 ----------
-const palette = ['#14b8a6', '#6366f1', '#f59e0b', '#ec4899', '#3b82f6', '#8b5cf6', '#10b981', '#f97316', '#06b6d4', '#ef4444', '#84cc16', '#a855f7']
+const palette = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16', '#06b6d4', '#a855f7']
 const otherColor = '#94a3b8'
 const colorMap = computed(() => {
   const m = new Map<string, string>()
@@ -777,107 +589,42 @@ const colorMap = computed(() => {
 function colorOf(model: string) {
   return colorMap.value.get(model) ?? otherColor
 }
-function barGradient(model: string) {
-  const c = colorOf(model)
-  return `linear-gradient(90deg, ${c}80, ${c})`
-}
 function labelOf(model: string) {
   return model === LEADERBOARD_OTHER ? t('modelLeaderboard.charts.other') : model
-}
-
-const medalStyles = {
-  1: {
-    key: 'first',
-    order: 'md:order-2',
-    card: 'border-amber-200/80 shadow-xl shadow-amber-500/10 dark:border-amber-500/30',
-    bar: 'from-amber-300 via-yellow-400 to-amber-500',
-    glow: 'bg-amber-400/25',
-    badge: 'from-amber-300 via-yellow-400 to-amber-500 shadow-amber-500/40 ring-amber-100 dark:ring-amber-500/20',
-    text: 'text-amber-600 dark:text-amber-400',
-    pedestal: 'h-20 from-amber-400 to-amber-600'
-  },
-  2: {
-    key: 'second',
-    order: 'md:order-1',
-    card: 'border-slate-200 dark:border-slate-500/30',
-    bar: 'from-slate-300 via-gray-300 to-slate-400',
-    glow: 'bg-slate-400/20',
-    badge: 'from-slate-300 via-gray-400 to-slate-500 shadow-slate-500/40 ring-slate-100 dark:ring-slate-500/20',
-    text: 'text-slate-500 dark:text-slate-300',
-    pedestal: 'h-14 from-slate-300 to-slate-500'
-  },
-  3: {
-    key: 'third',
-    order: 'md:order-3',
-    card: 'border-orange-200/80 dark:border-orange-500/30',
-    bar: 'from-orange-300 via-amber-600 to-orange-700',
-    glow: 'bg-orange-400/20',
-    badge: 'from-orange-300 via-orange-500 to-amber-700 shadow-orange-500/40 ring-orange-100 dark:ring-orange-500/20',
-    text: 'text-orange-600 dark:text-orange-400',
-    pedestal: 'h-10 from-orange-400 to-amber-700'
-  }
-} as const
-
-function medal(rank: number) {
-  return medalStyles[(rank >= 1 && rank <= 3 ? rank : 3) as 1 | 2 | 3]
-}
-function rowHighlight(rank: number) {
-  if (rank === 1) return 'bg-gradient-to-r from-amber-50 via-amber-50/40 to-transparent dark:from-amber-500/10 dark:via-amber-500/5'
-  if (rank === 2) return 'bg-gradient-to-r from-slate-100/80 via-slate-50/40 to-transparent dark:from-slate-400/10 dark:via-slate-400/5'
-  if (rank === 3) return 'bg-gradient-to-r from-orange-50 via-orange-50/40 to-transparent dark:from-orange-500/10 dark:via-orange-500/5'
-  return ''
 }
 
 const isDark = () => document.documentElement.classList.contains('dark')
 const axisColor = () => (isDark() ? '#9ca3af' : '#6b7280')
 const gridColor = () => (isDark() ? 'rgba(75,85,99,0.35)' : 'rgba(229,231,235,0.8)')
-const tooltipStyle = () => ({
-  backgroundColor: isDark() ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.97)',
-  titleColor: isDark() ? '#f1f5f9' : '#0f172a',
-  bodyColor: isDark() ? '#cbd5e1' : '#334155',
-  borderColor: isDark() ? 'rgba(71,85,105,0.6)' : 'rgba(226,232,240,1)',
-  borderWidth: 1,
-  padding: 10,
-  cornerRadius: 10,
-  boxPadding: 4,
-  usePointStyle: true
+const legendBottom = () => ({
+  position: 'bottom' as const,
+  labels: { color: axisColor(), boxWidth: 10, boxHeight: 10, font: { size: 11 } }
 })
 
 // ---------- 图表 ----------
-const podium = computed(() => (period.value?.ranking ?? []).slice(0, 3))
-
 const shareChart = computed(() => {
-  const rows = period.value?.ranking ?? []
+  const rows = ranking.value
   const top = rows.slice(0, 8)
-  const rest = rows.slice(8).reduce((a, r) => a + r.requests, 0)
+  const rest = rows.slice(8).reduce((a, r) => a + metricOf(r), 0)
   const labels = top.map((r) => r.model)
-  const values = top.map((r) => r.requests)
+  const values = top.map((r) => metricOf(r))
   const colors = top.map((r) => colorOf(r.model))
   if (rest > 0) {
     labels.push(t('modelLeaderboard.charts.other'))
     values.push(rest)
     colors.push(otherColor)
   }
-  return {
-    labels,
-    datasets: [{
-      data: values,
-      backgroundColor: colors,
-      borderWidth: 2,
-      borderColor: isDark() ? '#1e293b' : '#ffffff',
-      hoverOffset: 6,
-      borderRadius: 4
-    }]
-  }
+  return { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }] }
 })
 
 const shareLegend = computed(() => {
   const c = shareChart.value
   const values = c.datasets[0].data
   const total = values.reduce((a, b) => a + b, 0)
-  return c.labels.slice(0, 6).map((label, i) => ({
+  return c.labels.map((label, i) => ({
     label,
     color: c.datasets[0].backgroundColor[i],
+    value: values[i],
     share: total ? values[i] / total : 0
   }))
 })
@@ -885,11 +632,9 @@ const shareLegend = computed(() => {
 const doughnutOptions = computed(() => ({
   responsive: true,
   maintainAspectRatio: false,
-  cutout: '70%',
   plugins: {
     legend: { display: false },
     tooltip: {
-      ...tooltipStyle(),
       callbacks: {
         label: (ctx: any) => {
           const total = (ctx.dataset.data as number[]).reduce((a, b) => a + b, 0)
@@ -900,23 +645,16 @@ const doughnutOptions = computed(() => ({
   }
 }))
 
-function metricValue(r: LeaderboardRankItem, m: Metric) {
-  return m === 'tokens' ? r.total_tokens : m === 'users' ? r.users : r.requests
-}
-
 const topBarChart = computed(() => {
-  const rows = [...(period.value?.ranking ?? [])]
-    .sort((a, b) => metricValue(b, barMetric.value) - metricValue(a, barMetric.value))
-    .slice(0, 10)
+  const rows = ranking.value.slice(0, 10)
   return {
     labels: rows.map((r) => r.model),
     datasets: [{
-      label: t(`modelLeaderboard.metric.${barMetric.value}`),
-      data: rows.map((r) => metricValue(r, barMetric.value)),
+      label: metricLabel.value,
+      data: rows.map((r) => metricOf(r)),
       backgroundColor: rows.map((r) => colorOf(r.model)),
-      borderRadius: 6,
-      borderSkipped: false,
-      maxBarThickness: 20
+      borderRadius: 4,
+      maxBarThickness: 18
     }]
   }
 })
@@ -927,11 +665,11 @@ const hBarOptions = computed(() => ({
   maintainAspectRatio: false,
   plugins: {
     legend: { display: false },
-    tooltip: { ...tooltipStyle(), callbacks: { label: (ctx: any) => formatInt(ctx.raw) } }
+    tooltip: { callbacks: { label: (ctx: any) => formatInt(ctx.raw) } }
   },
   scales: {
-    x: { ticks: { color: axisColor(), callback: (v: any) => formatCompactNumber(Number(v)) }, grid: { color: gridColor() }, border: { display: false } },
-    y: { ticks: { color: axisColor(), font: { size: 11 } }, grid: { display: false }, border: { display: false } }
+    x: { ticks: { color: axisColor(), callback: (v: any) => formatCompactNumber(Number(v)) }, grid: { color: gridColor() } },
+    y: { ticks: { color: axisColor(), font: { size: 11 } }, grid: { display: false } }
   }
 }))
 
@@ -944,10 +682,9 @@ const trendChart = computed(() => {
     labels,
     datasets: (s.datasets ?? []).map((d) => ({
       label: labelOf(d.model),
-      data: trendMetric.value === 'tokens' ? d.tokens : d.requests,
+      data: isTokens.value ? d.tokens : d.requests,
       backgroundColor: colorOf(d.model),
       stack: 'm',
-      borderRadius: 3,
       maxBarThickness: 36
     }))
   }
@@ -958,28 +695,24 @@ const stackedOptions = computed(() => ({
   maintainAspectRatio: false,
   interaction: { mode: 'index' as const, intersect: false },
   plugins: {
-    legend: { position: 'bottom' as const, labels: { color: axisColor(), boxWidth: 8, boxHeight: 8, usePointStyle: true, font: { size: 11 } } },
+    legend: legendBottom(),
     tooltip: {
-      ...tooltipStyle(),
       itemSort: (a: any, b: any) => b.raw - a.raw,
       filter: (item: any) => item.raw > 0,
       callbacks: { label: (ctx: any) => `${ctx.dataset.label}: ${formatInt(ctx.raw)}` }
     }
   },
   scales: {
-    x: { stacked: true, ticks: { color: axisColor(), maxRotation: 0, autoSkip: true }, grid: { display: false }, border: { display: false } },
-    y: { stacked: true, ticks: { color: axisColor(), callback: (v: any) => formatCompactNumber(Number(v)) }, grid: { color: gridColor() }, border: { display: false } }
+    x: { stacked: true, ticks: { color: axisColor(), maxRotation: 0, autoSkip: true }, grid: { display: false } },
+    y: { stacked: true, ticks: { color: axisColor(), callback: (v: any) => formatCompactNumber(Number(v)) }, grid: { color: gridColor() } }
   }
 }))
 
 const tokenMixChart = computed(() => {
-  const rows = [...(period.value?.ranking ?? [])].sort((a, b) => b.total_tokens - a.total_tokens).slice(0, 10)
+  const rows = [...ranking.value].sort((a, b) => b.total_tokens - a.total_tokens).slice(0, 10)
   const mk = (key: keyof LeaderboardRankItem, label: string, color: string) => ({
     label,
-    data: rows.map((r) => {
-      const total = r.total_tokens || 1
-      return ((r[key] as number) / total) * 100
-    }),
+    data: rows.map((r) => ((r[key] as number) / (r.total_tokens || 1)) * 100),
     raw: rows.map((r) => r[key] as number),
     backgroundColor: color,
     stack: 't',
@@ -988,10 +721,10 @@ const tokenMixChart = computed(() => {
   return {
     labels: rows.map((r) => r.model),
     datasets: [
-      mk('input_tokens', t('modelLeaderboard.charts.input'), '#6366f1'),
-      mk('output_tokens', t('modelLeaderboard.charts.output'), '#14b8a6'),
+      mk('input_tokens', t('modelLeaderboard.charts.input'), '#3b82f6'),
+      mk('output_tokens', t('modelLeaderboard.charts.output'), '#10b981'),
       mk('cache_creation_tokens', t('modelLeaderboard.charts.cacheCreate'), '#f59e0b'),
-      mk('cache_read_tokens', t('modelLeaderboard.charts.cacheRead'), '#38bdf8')
+      mk('cache_read_tokens', t('modelLeaderboard.charts.cacheRead'), '#8b5cf6')
     ]
   }
 })
@@ -1001,28 +734,27 @@ const tokenMixOptions = computed(() => ({
   responsive: true,
   maintainAspectRatio: false,
   plugins: {
-    legend: { position: 'bottom' as const, labels: { color: axisColor(), boxWidth: 8, boxHeight: 8, usePointStyle: true, font: { size: 11 } } },
+    legend: legendBottom(),
     tooltip: {
-      ...tooltipStyle(),
       callbacks: {
         label: (ctx: any) => `${ctx.dataset.label}: ${ctx.raw.toFixed(1)}% (${formatCompactNumber(ctx.dataset.raw[ctx.dataIndex])})`
       }
     }
   },
   scales: {
-    x: { stacked: true, max: 100, ticks: { color: axisColor(), callback: (v: any) => `${v}%` }, grid: { color: gridColor() }, border: { display: false } },
-    y: { stacked: true, ticks: { color: axisColor(), font: { size: 10 } }, grid: { display: false }, border: { display: false } }
+    x: { stacked: true, max: 100, ticks: { color: axisColor(), callback: (v: any) => `${v}%` }, grid: { color: gridColor() } },
+    y: { stacked: true, ticks: { color: axisColor(), font: { size: 10 } }, grid: { display: false } }
   }
 }))
 
-// 月度明细：调用量柱 + 活跃用户（右轴）
+// 月度明细：当前口径柱 + 活跃用户（右轴）
 const monthTotalsChart = computed(() => {
-  const rows = monthSeries.value
+  const rows = [...(data.value?.month_rows ?? [])].reverse()
   return {
     labels: rows.map((r) => r.month),
     datasets: [
-      { type: 'bar' as const, label: t('modelLeaderboard.metric.requests'), data: rows.map((r) => r.requests), backgroundColor: '#14b8a6', borderRadius: 6, borderSkipped: false, yAxisID: 'y', maxBarThickness: 44 },
-      { type: 'bar' as const, label: t('modelLeaderboard.metric.users'), data: rows.map((r) => r.users), backgroundColor: '#f59e0b', borderRadius: 6, borderSkipped: false, yAxisID: 'y1', maxBarThickness: 44 }
+      { label: metricLabel.value, data: rows.map((r) => metricOf(r)), backgroundColor: '#3b82f6', borderRadius: 4, yAxisID: 'y', maxBarThickness: 40 },
+      { label: t('modelLeaderboard.metric.users'), data: rows.map((r) => r.users), backgroundColor: '#10b981', borderRadius: 4, yAxisID: 'y1', maxBarThickness: 40 }
     ]
   }
 })
@@ -1031,52 +763,45 @@ const monthTotalsOptions = computed(() => ({
   responsive: true,
   maintainAspectRatio: false,
   plugins: {
-    legend: { position: 'bottom' as const, labels: { color: axisColor(), boxWidth: 8, boxHeight: 8, usePointStyle: true } },
-    tooltip: { ...tooltipStyle(), callbacks: { label: (ctx: any) => `${ctx.dataset.label}: ${formatInt(ctx.raw)}` } }
+    legend: legendBottom(),
+    tooltip: { callbacks: { label: (ctx: any) => `${ctx.dataset.label}: ${formatInt(ctx.raw)}` } }
   },
   scales: {
-    x: { ticks: { color: axisColor() }, grid: { display: false }, border: { display: false } },
-    y: { position: 'left' as const, ticks: { color: axisColor(), callback: (v: any) => formatCompactNumber(Number(v)) }, grid: { color: gridColor() }, border: { display: false } },
-    y1: { position: 'right' as const, ticks: { color: axisColor(), precision: 0 }, grid: { display: false }, border: { display: false } }
+    x: { ticks: { color: axisColor() }, grid: { display: false } },
+    y: { position: 'left' as const, ticks: { color: axisColor(), callback: (v: any) => formatCompactNumber(Number(v)) }, grid: { color: gridColor() } },
+    y1: { position: 'right' as const, ticks: { color: axisColor(), precision: 0 }, grid: { display: false } }
   }
 }))
-
-const monthMaxRequests = computed(() => Math.max(0, ...(data.value?.month_rows ?? []).map((r) => r.requests)))
-const peakMonth = computed(() => {
-  const rows = data.value?.month_rows ?? []
-  if (rows.length < 2 || !monthMaxRequests.value) return ''
-  return rows.find((r) => r.requests === monthMaxRequests.value)?.month ?? ''
-})
 
 function monthGrowth(i: number): number | null {
   const rows = data.value?.month_rows ?? []
   const prev = rows[i + 1]
-  return prev ? growthOf(rows[i].requests, prev.requests) : null
+  return prev ? growthOf(metricOf(rows[i]), metricOf(prev)) : null
 }
 
 // ---------- 表格 ----------
 const columns = computed(() => {
-  const cols = [
-    { key: 'rank', label: t('modelLeaderboard.table.rank'), align: 'left', sortable: true },
-    { key: 'model', label: t('modelLeaderboard.table.model'), align: 'left', sortable: true },
-    { key: 'requests', label: t('modelLeaderboard.table.requests'), sortable: true },
-    { key: 'request_share', label: t('modelLeaderboard.table.share'), sortable: true },
-    { key: 'total_tokens', label: t('modelLeaderboard.table.tokens'), sortable: true },
-    { key: 'input_tokens', label: t('modelLeaderboard.table.input'), sortable: true },
-    { key: 'output_tokens', label: t('modelLeaderboard.table.output'), sortable: true },
-    { key: 'cache_hit_rate', label: t('modelLeaderboard.table.cacheHit'), sortable: true },
-    { key: 'users', label: t('modelLeaderboard.table.users'), sortable: true },
-    { key: 'avg_duration_ms', label: t('modelLeaderboard.table.latency'), sortable: true },
-    { key: 'avg_first_token_ms', label: t('modelLeaderboard.table.ttft'), sortable: true },
-    { key: 'requests_growth', label: t('modelLeaderboard.table.growth'), sortable: true }
-  ] as Array<{ key: string; label: string; align?: string; sortable?: boolean }>
+  const cols: Array<{ key: string; label: string; left?: boolean }> = [
+    { key: 'rank', label: t('modelLeaderboard.table.rank'), left: true },
+    { key: 'model', label: t('modelLeaderboard.table.model'), left: true },
+    { key: 'requests', label: t('modelLeaderboard.table.requests') },
+    { key: 'total_tokens', label: t('modelLeaderboard.table.tokens') },
+    { key: 'share', label: t('modelLeaderboard.table.share') },
+    { key: 'input_tokens', label: t('modelLeaderboard.table.input') },
+    { key: 'output_tokens', label: t('modelLeaderboard.table.output') },
+    { key: 'cache_hit_rate', label: t('modelLeaderboard.table.cacheHit') },
+    { key: 'users', label: t('modelLeaderboard.table.users') },
+    { key: 'avg_duration_ms', label: t('modelLeaderboard.table.latency') },
+    { key: 'avg_first_token_ms', label: t('modelLeaderboard.table.ttft') },
+    { key: 'growth', label: t('modelLeaderboard.table.growth') }
+  ]
   if (data.value?.cost_visible) {
     cols.push(
-      { key: 'actual_cost', label: t('modelLeaderboard.table.actualCost'), sortable: true },
-      { key: 'cost', label: t('modelLeaderboard.table.cost'), sortable: true }
+      { key: 'actual_cost', label: t('modelLeaderboard.table.actualCost') },
+      { key: 'cost', label: t('modelLeaderboard.table.cost') }
     )
   }
-  cols.push({ key: 'last_used_at', label: t('modelLeaderboard.table.lastUsed'), sortable: true })
+  cols.push({ key: 'last_used_at', label: t('modelLeaderboard.table.lastUsed') })
   return cols
 })
 
@@ -1089,14 +814,20 @@ function toggleSort(key: string) {
   }
 }
 
+function sortValue(r: LeaderboardRankItem, key: string) {
+  if (key === 'share') return shareOf(r)
+  if (key === 'growth') return growthOfItem(r)
+  return r[key as keyof LeaderboardRankItem]
+}
+
 const filteredRanking = computed(() => {
-  const kw = keyword.value.toLowerCase()
-  const rows = (period.value?.ranking ?? []).filter((r) => !kw || r.model.toLowerCase().includes(kw))
-  const key = sortKey.value as keyof LeaderboardRankItem
+  const kw = keyword.value.trim().toLowerCase()
+  const rows = ranking.value.filter((r) => !kw || r.model.toLowerCase().includes(kw))
+  const key = sortKey.value
   const dir = sortDesc.value ? -1 : 1
   return [...rows].sort((a, b) => {
-    const av = a[key]
-    const bv = b[key]
+    const av = sortValue(a, key)
+    const bv = sortValue(b, key)
     if (av === bv) return a.rank - b.rank
     if (av === null || av === undefined) return 1
     if (bv === null || bv === undefined) return -1
@@ -1105,7 +836,7 @@ const filteredRanking = computed(() => {
   })
 })
 
-// ---------- 排名变化小组件 ----------
+// ---------- 排名变化 ----------
 const RankMove = defineComponent({
   props: {
     item: { type: Object as () => LeaderboardRankItem, required: true },
@@ -1114,16 +845,15 @@ const RankMove = defineComponent({
   setup(props) {
     return () => {
       const it = props.item
-      const parts = []
       if (it.prev_rank === null || it.prev_rank === undefined) {
-        parts.push(h('span', { class: 'rounded-full bg-gradient-to-r from-primary-500 to-cyan-500 px-2 py-0.5 text-[10px] font-bold text-white shadow-sm shadow-primary-500/30' }, t('modelLeaderboard.table.newEntry')))
-      } else {
-        const diff = it.prev_rank - it.rank
-        const cls = diff > 0 ? 'text-emerald-600 dark:text-emerald-400' : diff < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-gray-400 dark:text-dark-500'
-        parts.push(h('span', { class: `text-xs font-semibold ${cls}`, title: `#${it.prev_rank} → #${it.rank}` }, diff > 0 ? `▲${diff}` : diff < 0 ? `▼${-diff}` : '—'))
-        if (props.showGrowth && it.requests_growth !== null && it.requests_growth !== undefined) {
-          parts.push(h('span', { class: `ml-1.5 text-xs ${deltaClass(it.requests_growth)}` }, formatGrowth(it.requests_growth)))
-        }
+        return h('span', { class: 'badge badge-primary whitespace-nowrap' }, t('modelLeaderboard.table.newEntry'))
+      }
+      const diff = it.prev_rank - it.rank
+      const cls = diff > 0 ? 'text-emerald-600 dark:text-emerald-400' : diff < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-400 dark:text-gray-500'
+      const parts = [h('span', { class: `text-xs font-medium ${cls}`, title: `#${it.prev_rank} → #${it.rank}` }, diff > 0 ? `↑${diff}` : diff < 0 ? `↓${-diff}` : '—')]
+      const g = growthOfItem(it)
+      if (props.showGrowth && g !== null && g !== undefined) {
+        parts.push(h('span', { class: `ml-1.5 text-xs tabular-nums ${deltaClass(g)}` }, formatGrowth(g)))
       }
       return h('span', { class: 'inline-flex items-center whitespace-nowrap' }, parts)
     }

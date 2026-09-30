@@ -155,7 +155,7 @@ func newLeaderboardFixture(t *testing.T) (*fakeLeaderboardRepo, *ModelLeaderboar
 
 func TestModelLeaderboard_CurrentMonth(t *testing.T) {
 	_, svc, _ := newLeaderboardFixture(t)
-	resp, err := svc.Get(context.Background(), "", "", true)
+	resp, err := svc.Get(context.Background(), "", "", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestModelLeaderboard_CurrentMonth(t *testing.T) {
 
 func TestModelLeaderboard_AllTimeMergesHistoryAndLive(t *testing.T) {
 	_, svc, _ := newLeaderboardFixture(t)
-	resp, err := svc.Get(context.Background(), "", "", true)
+	resp, err := svc.Get(context.Background(), "", "", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,13 +238,13 @@ func TestModelLeaderboard_AllTimeMergesHistoryAndLive(t *testing.T) {
 func TestModelLeaderboard_CacheLayers(t *testing.T) {
 	repo, svc, now := newLeaderboardFixture(t)
 	ctx := context.Background()
-	if _, err := svc.Get(ctx, "", "", true); err != nil {
+	if _, err := svc.Get(ctx, "", "", "", true); err != nil {
 		t.Fatal(err)
 	}
 	calls := repo.total()
 
 	// 60s 内：任意月份/身份都不再查库；非管理员费用被抹掉
-	user, err := svc.Get(ctx, "requested", "", false)
+	user, err := svc.Get(ctx, "requested", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,13 +254,13 @@ func TestModelLeaderboard_CacheLayers(t *testing.T) {
 	if user.CostVisible || user.Monthly.Summary.Cost != nil || user.Monthly.Prev.Cost != nil || user.Monthly.Ranking[0].Cost != nil || user.AllTime.Ranking[0].ActualCost != nil || user.MonthRows[0].Cost != nil {
 		t.Fatalf("cost not redacted for non-admin")
 	}
-	if again, _ := svc.Get(ctx, "", "", true); again.Monthly.Ranking[0].Cost == nil {
+	if again, _ := svc.Get(ctx, "", "", "", true); again.Monthly.Ranking[0].Cost == nil {
 		t.Fatalf("redaction leaked into admin response")
 	}
 
 	// 实时层过期：只重查当月，不重算历史快照
 	*now = now.Add(61 * time.Second)
-	if _, err := svc.Get(ctx, "", "", true); err != nil {
+	if _, err := svc.Get(ctx, "", "", "", true); err != nil {
 		t.Fatal(err)
 	}
 	if repo.count("stats:2026-09") != 2 || repo.count("pairs:2026-09") != 2 {
@@ -272,7 +272,7 @@ func TestModelLeaderboard_CacheLayers(t *testing.T) {
 
 	// 历史快照过期（1h）：重建一次
 	*now = now.Add(time.Hour)
-	if _, err := svc.Get(ctx, "", "", true); err != nil {
+	if _, err := svc.Get(ctx, "", "", "", true); err != nil {
 		t.Fatal(err)
 	}
 	if repo.count("stats:hist") != 2 {
@@ -282,7 +282,7 @@ func TestModelLeaderboard_CacheLayers(t *testing.T) {
 	// 跨月：边界变化，历史快照立即重建
 	*now = time.Date(2026, 10, 1, 0, 0, 30, 0, timezone.Location())
 	repo.boundary = time.Date(2026, 10, 1, 0, 0, 0, 0, timezone.Location())
-	resp, err := svc.Get(ctx, "", "", true)
+	resp, err := svc.Get(ctx, "", "", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestModelLeaderboard_CacheLayers(t *testing.T) {
 func TestModelLeaderboard_ClosedMonthView(t *testing.T) {
 	repo, svc, _ := newLeaderboardFixture(t)
 	ctx := context.Background()
-	resp, err := svc.Get(ctx, "", "2026-08", true)
+	resp, err := svc.Get(ctx, "", "2026-08", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestModelLeaderboard_ClosedMonthView(t *testing.T) {
 		t.Fatalf("all-time should have no comparison for closed month view")
 	}
 	// 已结束月份的日趋势只查一次
-	if _, err := svc.Get(ctx, "", "2026-08", false); err != nil {
+	if _, err := svc.Get(ctx, "", "2026-08", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if repo.count("daily:2026-08") != 1 {
@@ -334,7 +334,7 @@ func TestModelLeaderboard_ConcurrentColdStartSingleFlight(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := svc.Get(context.Background(), "", "", i%2 == 0); err != nil {
+			if _, err := svc.Get(context.Background(), "", "", "", i%2 == 0); err != nil {
 				errs <- err
 			}
 		}()
@@ -358,7 +358,7 @@ func TestModelLeaderboard_EmptyDatabaseHasNoNullArrays(t *testing.T) {
 	repo := &fakeLeaderboardRepo{boundary: time.Date(2026, 9, 1, 0, 0, 0, 0, timezone.Location())}
 	svc := NewModelLeaderboardService(repo)
 	svc.now = func() time.Time { return lbTestTime(9, 15) }
-	resp, err := svc.Get(context.Background(), "", "", false)
+	resp, err := svc.Get(context.Background(), "", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +380,7 @@ func TestModelLeaderboard_RolloverDoesNotReuseStaleBuild(t *testing.T) {
 
 	oldDone := make(chan error, 1)
 	go func() {
-		_, err := svc.Get(ctx, "", "", true)
+		_, err := svc.Get(ctx, "", "", "", true)
 		oldDone <- err
 	}()
 	time.Sleep(30 * time.Millisecond) // 旧月份构建阻塞在历史查询
@@ -388,7 +388,7 @@ func TestModelLeaderboard_RolloverDoesNotReuseStaleBuild(t *testing.T) {
 	*now = time.Date(2026, 10, 1, 0, 0, 5, 0, timezone.Location())
 	newDone := make(chan *ModelLeaderboardResponse, 1)
 	go func() {
-		resp, _ := svc.Get(ctx, "", "", true)
+		resp, _ := svc.Get(ctx, "", "", "", true)
 		newDone <- resp
 	}()
 	time.Sleep(30 * time.Millisecond)
@@ -412,12 +412,71 @@ func TestModelLeaderboard_RolloverDoesNotReuseStaleBuild(t *testing.T) {
 	}
 }
 
+func TestModelLeaderboard_TokensMetric(t *testing.T) {
+	repo, svc, _ := newLeaderboardFixture(t)
+	repo.stats["2026-09"][2].TotalTokens = 5000 // new：调用最少但 Token 最多
+	repo.daily["2026-09"] = []LeaderboardBucketPoint{
+		{Bucket: "2026-09-01", Model: "a", Requests: 7, TotalTokens: 10},
+		{Bucket: "2026-09-15", Model: "b", Requests: 3, TotalTokens: 50},
+	}
+	ctx := context.Background()
+
+	byReq, err := svc.Get(ctx, "", "", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := repo.total()
+	resp, err := svc.Get(ctx, "", "", LeaderboardMetricTokens, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repo.total() != calls {
+		t.Fatalf("switching metric must not query again: %d -> %d", calls, repo.total())
+	}
+	if byReq.Metric != LeaderboardMetricRequests || resp.Metric != LeaderboardMetricTokens {
+		t.Fatalf("metric echo wrong: %q %q", byReq.Metric, resp.Metric)
+	}
+
+	r := resp.Monthly.Ranking
+	if len(r) != 3 || r[0].Model != "new" || r[1].Model != "a" || r[2].Model != "b" || r[0].Rank != 1 {
+		t.Fatalf("monthly token order wrong: %+v", r)
+	}
+	// 对比期按 Token 排：a(1) 第 1，b(0) 第 2
+	if r[1].PrevRank == nil || *r[1].PrevRank != 1 || r[1].TokensGrowth == nil || *r[1].TokensGrowth != 899 || *r[1].RequestsGrowth != 0.5 {
+		t.Fatalf("a token prev/growth wrong: %+v", r[1])
+	}
+	if r[2].PrevRank == nil || *r[2].PrevRank != 2 || r[2].PrevTokens == nil || *r[2].PrevTokens != 0 || r[2].TokensGrowth != nil {
+		t.Fatalf("b token prev/growth wrong: %+v", r[2])
+	}
+	if r[0].PrevRank != nil {
+		t.Fatalf("new should still be a new entry: %+v", r[0])
+	}
+	if resp.Monthly.Trend.Datasets[0].Model != "b" {
+		t.Fatalf("daily series should be ordered by tokens: %+v", resp.Monthly.Trend.Datasets)
+	}
+
+	at := resp.AllTime.Ranking
+	if len(at) != 3 || at[0].Model != "b" || at[1].Model != "new" || at[2].Model != "a" || at[2].PrevRank == nil || *at[2].PrevRank != 2 {
+		t.Fatalf("all-time token order wrong: %+v", at)
+	}
+	if mr := resp.MonthRows[0]; mr.TopModel != "new" || mr.TopModelShare != 5000.0/6400.0 {
+		t.Fatalf("month row token top wrong: %+v", mr)
+	}
+	if mr := byReq.MonthRows[0]; mr.TopModel != "a" || mr.TopModelShare != 0.6 {
+		t.Fatalf("month row request top wrong: %+v", mr)
+	}
+
+	if _, err := svc.Get(ctx, "", "", "cost", true); err == nil {
+		t.Fatal("expected invalid metric error")
+	}
+}
+
 func TestModelLeaderboard_BucketSeriesOther(t *testing.T) {
 	points := make([]LeaderboardBucketPoint, 0)
 	for i := 0; i < leaderboardTrendTopN+3; i++ {
 		points = append(points, LeaderboardBucketPoint{Bucket: "2026-09", Model: string(rune('a' + i)), Requests: int64(100 - i), TotalTokens: 1})
 	}
-	s := lbBuildBucketSeries(points, []string{"2026-08", "2026-09"})
+	s := lbBuildBucketSeries(points, []string{"2026-08", "2026-09"}, LeaderboardMetricRequests)
 	if len(s.Datasets) != leaderboardTrendTopN+1 {
 		t.Fatalf("datasets = %d", len(s.Datasets))
 	}

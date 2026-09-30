@@ -1,10 +1,11 @@
 /**
  * 模型调用量排行榜（DarthCY 定制）
- * GET /api/v1/model-leaderboard?source=requested|upstream&month=YYYY-MM
+ * GET /api/v1/model-leaderboard?source=requested|upstream&month=YYYY-MM&metric=requests|tokens
  */
 import { apiClient } from './client'
 
 export type LeaderboardSource = 'requested' | 'upstream'
+export type LeaderboardMetric = 'requests' | 'tokens'
 
 export interface LeaderboardRankItem {
   rank: number
@@ -27,6 +28,8 @@ export interface LeaderboardRankItem {
   prev_rank: number | null
   prev_requests: number | null
   requests_growth: number | null
+  prev_tokens: number | null
+  tokens_growth: number | null
   cost?: number
   actual_cost?: number
 }
@@ -74,6 +77,7 @@ export interface LeaderboardMonthRow {
 
 export interface ModelLeaderboardResponse {
   source: LeaderboardSource
+  metric: LeaderboardMetric
   timezone: string
   generated_at: string
   month: string
@@ -88,7 +92,7 @@ export interface ModelLeaderboardResponse {
 export const LEADERBOARD_OTHER = '__other__'
 
 export async function getModelLeaderboard(
-  params: { source?: LeaderboardSource; month?: string } = {},
+  params: { source?: LeaderboardSource; month?: string; metric?: LeaderboardMetric } = {},
   options?: { signal?: AbortSignal }
 ): Promise<ModelLeaderboardResponse> {
   const { data } = await apiClient.get<ModelLeaderboardResponse>('/model-leaderboard', {
