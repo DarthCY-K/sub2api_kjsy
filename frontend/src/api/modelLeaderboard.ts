@@ -53,6 +53,38 @@ export interface LeaderboardSeries {
   datasets: Array<{ model: string; requests: number[]; tokens: number[] }>
 }
 
+export interface LeaderboardUserModel {
+  model: string
+  requests: number
+  total_tokens: number
+  /** 该模型占此用户当前口径的比例 */
+  share: number
+  cost?: number
+  actual_cost?: number
+}
+
+/** 用户用量排行；非管理员看到的他人 name 为脱敏名，且无 user_id / email */
+export interface LeaderboardUserItem {
+  rank: number
+  user_id?: number
+  name: string
+  email?: string
+  deleted: boolean
+  is_self: boolean
+  requests: number
+  request_share: number
+  total_tokens: number
+  token_share: number
+  input_tokens: number
+  output_tokens: number
+  cache_creation_tokens: number
+  cache_read_tokens: number
+  models: LeaderboardUserModel[]
+  last_used_at: string
+  cost?: number
+  actual_cost?: number
+}
+
 export interface LeaderboardPeriod {
   label: string
   start: string
@@ -61,6 +93,10 @@ export interface LeaderboardPeriod {
   prev?: LeaderboardSummary
   ranking: LeaderboardRankItem[]
   trend: LeaderboardSeries
+  /** 前 100 名 */
+  user_ranking: LeaderboardUserItem[]
+  /** 本人不在前 100 名时单独返回 */
+  user_self?: LeaderboardUserItem
 }
 
 export interface LeaderboardMonthRow {

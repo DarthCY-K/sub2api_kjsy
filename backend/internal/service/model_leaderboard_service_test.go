@@ -22,6 +22,9 @@ type fakeLeaderboardRepo struct {
 	daily     map[string][]LeaderboardBucketPoint
 	histGate  chan struct{} // 非 nil 时历史 stats 查询阻塞到 close
 	prevCheck func(start, end time.Time)
+
+	idents       map[int64]LeaderboardUserIdentity
+	identQueried []int64
 }
 
 func (f *fakeLeaderboardRepo) kind(start, end time.Time) string {
@@ -72,10 +75,24 @@ func (f *fakeLeaderboardRepo) GetMonthModelStats(_ context.Context, start, end t
 	return f.stats[k], nil
 }
 
-func (f *fakeLeaderboardRepo) GetModelUserPairs(_ context.Context, start, end time.Time, _ string) ([]LeaderboardModelUser, error) {
+func (f *fakeLeaderboardRepo) GetModelUserStats(_ context.Context, start, end time.Time, _ string) ([]LeaderboardModelUser, error) {
 	k := f.kind(start, end)
-	f.hit("pairs:" + k)
+	f.hit("users:" + k)
 	return f.pairs[k], nil
+}
+
+func (f *fakeLeaderboardRepo) GetUserIdentities(_ context.Context, ids []int64) ([]LeaderboardUserIdentity, error) {
+	f.hit("idents")
+	f.mu.Lock()
+	f.identQueried = append(f.identQueried, ids...)
+	f.mu.Unlock()
+	var out []LeaderboardUserIdentity
+	for _, id := range ids {
+		if u, ok := f.idents[id]; ok {
+			out = append(out, u)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeLeaderboardRepo) GetDailyModelUsage(_ context.Context, start, _ time.Time, _ string) ([]LeaderboardBucketPoint, error) {
@@ -256,10 +273,10 @@ func TestModelLeaderboard_CacheLayers(t *testing.T) {
 	if _, err := svc.Get(ctx, LeaderboardQuery{}, true); err != nil {
 		t.Fatal(err)
 	}
-	if repo.count("stats:2026-09") != 2 || repo.count("pairs:2026-09") != 2 {
+	if repo.count("stats:2026-09") != 2 || repo.count("users:2026-09") != 2 {
 		t.Fatalf("live layer not refreshed: %v", repo.calls)
 	}
-	if repo.count("stats:hist") != 1 || repo.count("pairs:hist") != 1 {
+	if repo.count("stats:hist") != 1 || repo.count("users:hist") != 1 {
 		t.Fatalf("history should stay cached: %v", repo.calls)
 	}
 

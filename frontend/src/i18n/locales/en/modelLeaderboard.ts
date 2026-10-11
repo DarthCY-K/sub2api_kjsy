@@ -62,6 +62,18 @@ export default {
       topModel: 'Top model',
       topShare: 'Top share'
     },
+    users: {
+      title: 'User ranking',
+      user: 'User',
+      models: 'Top models',
+      me: 'Me',
+      deleted: 'Deleted',
+      anonymous: 'Anonymous',
+      unknown: 'User #{id}',
+      topOnly: 'Showing top {n} of {total} active users',
+      search: 'Search user',
+      expandHint: 'Click to see per-model usage'
+    },
     footnote: 'Aggregated from site-wide usage logs; current month refreshes every 60s; timezone {tz}. Ranked by {metric}, ties broken by {tie}.'
   }
 }

@@ -62,6 +62,18 @@ export default {
       topModel: '当月第一',
       topShare: '第一占比'
     },
+    users: {
+      title: '用户排行',
+      user: '用户',
+      models: '常用模型',
+      me: '我',
+      deleted: '已删除',
+      anonymous: '匿名用户',
+      unknown: '用户 #{id}',
+      topOnly: '仅显示前 {n} 名，共 {total} 位活跃用户',
+      search: '搜索用户',
+      expandHint: '点击查看分模型用量'
+    },
     footnote: '数据来自全站调用日志，当月数据每 60 秒刷新；时区 {tz}。排名按{metric}，相同时按{tie}。'
   }
 }

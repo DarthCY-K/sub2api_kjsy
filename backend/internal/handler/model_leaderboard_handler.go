@@ -12,7 +12,8 @@ import (
 
 // ModelLeaderboardHandler 「模型排行榜」：当月与历史累计的全站模型调用量排行。
 //
-// 路由挂 JWT：仅登录用户可见；数据为全站聚合（不含任何用户/Key 明细）。
+// 路由挂 JWT：仅登录用户可见；数据为全站聚合。
+// 用户用量排行对非管理员只返回脱敏名（本人除外），不返回用户 ID/邮箱；
 // 费用字段（标准计费/实际扣费）仅管理员返回。
 type ModelLeaderboardHandler struct {
 	svc *service.ModelLeaderboardService
@@ -44,12 +45,14 @@ func (h *ModelLeaderboardHandler) Get(c *gin.Context) {
 
 	role, _ := middleware.GetUserRoleFromContext(c)
 	isAdmin := role == service.RoleAdmin
+	subject, _ := middleware.GetAuthSubjectFromContext(c)
 
 	query := service.LeaderboardQuery{
-		Source: source,
-		Month:  strings.TrimSpace(c.Query("month")),
-		Metric: metric,
-		Vendor: vendor,
+		Source:   source,
+		Month:    strings.TrimSpace(c.Query("month")),
+		Metric:   metric,
+		Vendor:   vendor,
+		ViewerID: subject.UserID,
 	}
 	data, err := h.svc.Get(c.Request.Context(), query, isAdmin)
 	if err != nil {

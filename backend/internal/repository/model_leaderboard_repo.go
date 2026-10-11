@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
 )
 
 // modelLeaderboardRepository 模型调用量排行榜的只读聚合查询。
@@ -78,12 +79,25 @@ func (r *modelLeaderboardRepository) GetMonthModelStats(ctx context.Context, sta
 	return out, rows.Err()
 }
 
-func (r *modelLeaderboardRepository) GetModelUserPairs(ctx context.Context, start, end time.Time, source string) (out []service.LeaderboardModelUser, err error) {
+func (r *modelLeaderboardRepository) GetModelUserStats(ctx context.Context, start, end time.Time, source string) (out []service.LeaderboardModelUser, err error) {
 	query := fmt.Sprintf(`
-		SELECT DISTINCT TO_CHAR(created_at, 'YYYY-MM') AS month, %s AS model, user_id
+		SELECT
+			TO_CHAR(created_at, 'YYYY-MM') AS month,
+			%[1]s AS model,
+			user_id,
+			COUNT(*),
+			COALESCE(SUM(input_tokens), 0),
+			COALESCE(SUM(output_tokens), 0),
+			COALESCE(SUM(cache_creation_tokens), 0),
+			COALESCE(SUM(cache_read_tokens), 0),
+			COALESCE(SUM(%[2]s), 0),
+			COALESCE(SUM(total_cost), 0),
+			COALESCE(SUM(actual_cost), 0),
+			MAX(created_at)
 		FROM usage_logs
 		WHERE created_at >= $1 AND created_at < $2
-	`, resolveModelDimensionExpression(source))
+		GROUP BY 1, 2, 3
+	`, resolveModelDimensionExpression(source), leaderboardTokensExpr)
 	rows, err := r.db.QueryContext(ctx, query, start, end)
 	if err != nil {
 		return nil, err
@@ -97,10 +111,44 @@ func (r *modelLeaderboardRepository) GetModelUserPairs(ctx context.Context, star
 	out = make([]service.LeaderboardModelUser, 0, 256)
 	for rows.Next() {
 		var p service.LeaderboardModelUser
-		if err = rows.Scan(&p.Month, &p.Model, &p.UserID); err != nil {
+		if err = rows.Scan(
+			&p.Month, &p.Model, &p.UserID, &p.Requests,
+			&p.InputTokens, &p.OutputTokens, &p.CacheCreationTokens, &p.CacheReadTokens, &p.TotalTokens,
+			&p.Cost, &p.ActualCost, &p.LastUsedAt,
+		); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// GetUserIdentities 含已软删除用户：其历史用量仍计入排行。
+func (r *modelLeaderboardRepository) GetUserIdentities(ctx context.Context, ids []int64) (out []service.LeaderboardUserIdentity, err error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, email, username, deleted_at IS NOT NULL
+		FROM users
+		WHERE id = ANY($1)
+	`, pq.Array(ids))
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if cerr := rows.Close(); cerr != nil && err == nil {
+			err = cerr
+			out = nil
+		}
+	}()
+	out = make([]service.LeaderboardUserIdentity, 0, len(ids))
+	for rows.Next() {
+		var u service.LeaderboardUserIdentity
+		if err = rows.Scan(&u.UserID, &u.Email, &u.Username, &u.Deleted); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
 	}
 	return out, rows.Err()
 }

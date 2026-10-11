@@ -250,6 +250,145 @@
                 </table>
               </div>
             </div>
+
+            <!-- 用户排行 -->
+            <div class="card overflow-hidden">
+              <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-4 py-3 dark:border-dark-700">
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
+                  {{ t('modelLeaderboard.users.title') }}
+                  <span class="ml-1 text-xs font-normal text-gray-400">({{ filteredUsers.length }})</span>
+                  <span v-if="userTotal > userRanking.length" class="ml-2 text-xs font-normal text-gray-400">
+                    {{ t('modelLeaderboard.users.topOnly', { n: userRanking.length, total: formatInt(userTotal) }) }}
+                  </span>
+                </h3>
+                <div class="w-56">
+                  <SearchInput v-model="userKeyword" :placeholder="t('modelLeaderboard.users.search')" :debounce-ms="0" />
+                </div>
+              </div>
+              <div v-if="!userRows.length" class="p-8 text-center text-sm text-gray-500 dark:text-dark-400">
+                {{ t('modelLeaderboard.empty') }}
+              </div>
+              <div v-else class="overflow-x-auto">
+                <table class="w-full min-w-[1000px] text-sm">
+                  <thead class="bg-gray-50 text-xs text-gray-500 dark:bg-dark-800/50 dark:text-gray-400">
+                    <tr>
+                      <th class="w-14 whitespace-nowrap px-3 py-2.5 text-left font-medium">{{ t('modelLeaderboard.table.rank') }}</th>
+                      <th class="whitespace-nowrap px-3 py-2.5 text-left font-medium">{{ t('modelLeaderboard.users.user') }}</th>
+                      <th class="whitespace-nowrap px-3 py-2.5 text-right font-medium" :class="metricColumn === 'requests' ? 'text-gray-900 dark:text-white' : ''">{{ t('modelLeaderboard.table.requests') }}</th>
+                      <th class="whitespace-nowrap px-3 py-2.5 text-right font-medium" :class="metricColumn === 'total_tokens' ? 'text-gray-900 dark:text-white' : ''">{{ t('modelLeaderboard.table.tokens') }}</th>
+                      <th class="whitespace-nowrap px-3 py-2.5 text-right font-medium">{{ t('modelLeaderboard.table.share') }}</th>
+                      <th class="whitespace-nowrap px-3 py-2.5 text-right font-medium">{{ t('modelLeaderboard.table.input') }}</th>
+                      <th class="whitespace-nowrap px-3 py-2.5 text-right font-medium">{{ t('modelLeaderboard.table.output') }}</th>
+                      <th class="whitespace-nowrap px-3 py-2.5 text-left font-medium">{{ t('modelLeaderboard.users.models') }}</th>
+                      <th v-if="data.cost_visible" class="whitespace-nowrap px-3 py-2.5 text-right font-medium">{{ t('modelLeaderboard.table.actualCost') }}</th>
+                      <th v-if="data.cost_visible" class="whitespace-nowrap px-3 py-2.5 text-right font-medium">{{ t('modelLeaderboard.table.cost') }}</th>
+                      <th class="whitespace-nowrap px-3 py-2.5 text-right font-medium">{{ t('modelLeaderboard.table.lastUsed') }}</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+                    <template v-for="row in userRows" :key="row.rank">
+                      <tr v-if="row === userSelf">
+                        <td :colspan="userColspan" class="px-3 py-1 text-center text-xs text-gray-400 dark:text-gray-500">⋯</td>
+                      </tr>
+                      <tr
+                        class="cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-dark-800/30"
+                        :class="row.is_self ? 'bg-primary-50/60 dark:bg-primary-900/10' : ''"
+                        :title="t('modelLeaderboard.users.expandHint')"
+                        @click="toggleUser(row.rank)"
+                      >
+                        <td class="px-3 py-2.5 text-left">
+                          <span class="inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold tabular-nums" :class="rankBadgeClass(row.rank)">
+                            {{ row.rank }}
+                          </span>
+                        </td>
+                        <td class="max-w-[280px] px-3 py-2.5 text-left">
+                          <div class="flex items-center gap-2">
+                            <Icon :name="expandedUsers.has(row.rank) ? 'chevronDown' : 'chevronRight'" size="xs" class="shrink-0 text-gray-400" />
+                            <div class="min-w-0">
+                              <div class="flex items-center gap-1.5">
+                                <span class="truncate font-medium text-gray-900 dark:text-white" :title="userLabel(row)">{{ userLabel(row) }}</span>
+                                <span v-if="row.user_id" class="shrink-0 text-xs text-gray-400">#{{ row.user_id }}</span>
+                                <span v-if="row.is_self" class="badge badge-primary shrink-0">{{ t('modelLeaderboard.users.me') }}</span>
+                                <span v-if="row.deleted" class="badge badge-gray shrink-0">{{ t('modelLeaderboard.users.deleted') }}</span>
+                              </div>
+                              <p v-if="row.email && row.email !== row.name" class="truncate text-xs text-gray-400" :title="row.email">{{ row.email }}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td class="px-3 py-2.5 text-right tabular-nums" :class="cellClass('requests')">{{ formatInt(row.requests) }}</td>
+                        <td class="px-3 py-2.5 text-right tabular-nums" :class="cellClass('total_tokens')" :title="formatInt(row.total_tokens)">{{ formatCompactNumber(row.total_tokens) }}</td>
+                        <td class="px-3 py-2.5 text-right">
+                          <div class="flex items-center justify-end gap-2">
+                            <div class="h-1.5 w-20 overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700">
+                              <div class="h-full rounded-full bg-primary-500" :style="{ width: pct(userShareOf(row)) }" />
+                            </div>
+                            <span class="w-12 tabular-nums text-gray-600 dark:text-gray-400">{{ pct(userShareOf(row)) }}</span>
+                          </div>
+                        </td>
+                        <td class="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400">{{ formatCompactNumber(row.input_tokens) }}</td>
+                        <td class="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400">{{ formatCompactNumber(row.output_tokens) }}</td>
+                        <td class="px-3 py-2.5 text-left">
+                          <div class="flex items-center gap-1.5">
+                            <span
+                              v-for="m in row.models.slice(0, 3)"
+                              :key="m.model"
+                              class="inline-flex max-w-[180px] items-center gap-1 rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-700 dark:bg-dark-700 dark:text-gray-300"
+                              :title="`${m.model} · ${pct(m.share)}`"
+                            >
+                              <ModelIcon :model="m.model" size="12px" />
+                              <span class="truncate">{{ m.model }}</span>
+                              <span class="shrink-0 tabular-nums text-gray-400">{{ pct(m.share) }}</span>
+                            </span>
+                            <span v-if="row.models.length > 3" class="shrink-0 text-xs text-gray-400">+{{ row.models.length - 3 }}</span>
+                          </div>
+                        </td>
+                        <td v-if="data.cost_visible" class="px-3 py-2.5 text-right tabular-nums text-green-600 dark:text-green-400">${{ formatMoney(row.actual_cost) }}</td>
+                        <td v-if="data.cost_visible" class="px-3 py-2.5 text-right tabular-nums text-gray-400 dark:text-gray-500">${{ formatMoney(row.cost) }}</td>
+                        <td class="whitespace-nowrap px-3 py-2.5 text-right text-xs text-gray-500 dark:text-gray-400">{{ shortTime(row.last_used_at) }}</td>
+                      </tr>
+                      <tr v-if="expandedUsers.has(row.rank)" class="bg-gray-50/60 dark:bg-dark-800/30">
+                        <td :colspan="userColspan" class="px-3 py-3">
+                          <table class="ml-9 min-w-[560px] text-xs">
+                            <thead class="text-gray-500 dark:text-gray-400">
+                              <tr>
+                                <th class="px-2 py-1.5 text-left font-medium">{{ t('modelLeaderboard.table.model') }}</th>
+                                <th class="px-2 py-1.5 text-right font-medium">{{ t('modelLeaderboard.table.requests') }}</th>
+                                <th class="px-2 py-1.5 text-right font-medium">{{ t('modelLeaderboard.table.tokens') }}</th>
+                                <th class="px-2 py-1.5 text-right font-medium">{{ t('modelLeaderboard.table.share') }}</th>
+                                <th v-if="data.cost_visible" class="px-2 py-1.5 text-right font-medium">{{ t('modelLeaderboard.table.actualCost') }}</th>
+                                <th v-if="data.cost_visible" class="px-2 py-1.5 text-right font-medium">{{ t('modelLeaderboard.table.cost') }}</th>
+                              </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+                              <tr v-for="m in row.models" :key="m.model">
+                                <td class="max-w-[260px] px-2 py-1.5">
+                                  <div class="flex items-center gap-2">
+                                    <ModelIcon :model="m.model" size="14px" />
+                                    <span class="truncate text-gray-900 dark:text-white" :title="m.model">{{ m.model }}</span>
+                                  </div>
+                                </td>
+                                <td class="px-2 py-1.5 text-right tabular-nums" :class="cellClass('requests')">{{ formatInt(m.requests) }}</td>
+                                <td class="px-2 py-1.5 text-right tabular-nums" :class="cellClass('total_tokens')" :title="formatInt(m.total_tokens)">{{ formatCompactNumber(m.total_tokens) }}</td>
+                                <td class="px-2 py-1.5 text-right">
+                                  <div class="flex items-center justify-end gap-2">
+                                    <div class="h-1.5 w-16 overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700">
+                                      <div class="h-full rounded-full bg-primary-500" :style="{ width: pct(m.share) }" />
+                                    </div>
+                                    <span class="w-12 tabular-nums text-gray-600 dark:text-gray-400">{{ pct(m.share) }}</span>
+                                  </div>
+                                </td>
+                                <td v-if="data.cost_visible" class="px-2 py-1.5 text-right tabular-nums text-green-600 dark:text-green-400">${{ formatMoney(m.actual_cost) }}</td>
+                                <td v-if="data.cost_visible" class="px-2 py-1.5 text-right tabular-nums text-gray-400 dark:text-gray-500">${{ formatMoney(m.cost) }}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </template>
         </template>
 
@@ -348,6 +487,7 @@ import {
   type LeaderboardMetric,
   type LeaderboardRankItem,
   type LeaderboardSource,
+  type LeaderboardUserItem,
   type ModelLeaderboardResponse
 } from '@/api/modelLeaderboard'
 
@@ -877,6 +1017,50 @@ const filteredRanking = computed(() => {
     if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv) * dir
     return ((av as number) - (bv as number)) * dir
   })
+})
+
+// ---------- 用户排行 ----------
+const userKeyword = ref('')
+const expandedUsers = ref(new Set<number>())
+const userRanking = computed(() => period.value?.user_ranking ?? [])
+const userSelf = computed(() => period.value?.user_self)
+const userTotal = computed(() => period.value?.summary.users ?? 0)
+const userColspan = computed(() => (data.value?.cost_visible ? 11 : 9))
+
+function matchUser(r: LeaderboardUserItem, kw: string) {
+  return !kw || r.name.toLowerCase().includes(kw) || (r.email ?? '').toLowerCase().includes(kw)
+}
+
+const filteredUsers = computed(() => {
+  const kw = userKeyword.value.trim().toLowerCase()
+  return userRanking.value.filter((r) => matchUser(r, kw))
+})
+
+// 本人不在前 N 名时追加在末尾，模板里用 row === userSelf 插入分隔行
+const userRows = computed(() => {
+  const self = userSelf.value
+  const kw = userKeyword.value.trim().toLowerCase()
+  return self && matchUser(self, kw) ? [...filteredUsers.value, self] : filteredUsers.value
+})
+
+function toggleUser(rank: number) {
+  const next = new Set(expandedUsers.value)
+  if (next.has(rank)) next.delete(rank)
+  else next.add(rank)
+  expandedUsers.value = next
+}
+
+function userLabel(r: LeaderboardUserItem) {
+  if (r.name) return r.name
+  return r.user_id ? t('modelLeaderboard.users.unknown', { id: r.user_id }) : t('modelLeaderboard.users.anonymous')
+}
+
+function userShareOf(r: LeaderboardUserItem) {
+  return isTokens.value ? r.token_share : r.request_share
+}
+
+watch([activeTab, source, metric, month, vendor], () => {
+  expandedUsers.value = new Set()
 })
 
 // ---------- 排名变化 ----------
