@@ -572,7 +572,7 @@ func TestPricingService_GeminiFlashThinkingTiersUseBasePricing(t *testing.T) {
 		OutputCostPerToken:      7.5e-6,
 		CacheReadInputTokenCost: 0.15e-6,
 	}
-	for _, baseModel := range []string{"gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"} {
+	for _, baseModel := range []string{"gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash", "gemini-4-argon"} {
 		svc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{baseModel: basePricing}}
 		for _, tier := range []string{"", "-high", "-low", "-medium", "-tiered"} {
 			model := baseModel + tier
@@ -587,7 +587,7 @@ func TestPricingService_GeminiFlashThinkingTiersUseBasePricing(t *testing.T) {
 func TestPricingService_GeminiFlashTierSpecificPricingTakesPrecedence(t *testing.T) {
 	basePricing := &LiteLLMModelPricing{InputCostPerToken: 1.5e-6}
 	tierPricing := &LiteLLMModelPricing{InputCostPerToken: 2e-6}
-	for _, baseModel := range []string{"gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"} {
+	for _, baseModel := range []string{"gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash", "gemini-4-argon"} {
 		t.Run(baseModel, func(t *testing.T) {
 			svc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
 				baseModel:          basePricing,
@@ -1190,4 +1190,49 @@ func TestCalculateCost_ClaudeSonnetCatalogLadderIsDataDriven(t *testing.T) {
 	cost, err = svc.CalculateCost("claude-sonnet-4-5", under, 1.0)
 	require.NoError(t, err)
 	require.False(t, cost.LongContextBillingApplied, "恰好 200000 不进高档（严格大于）")
+}
+
+func TestPricingService_Gemini4ArgonThinkingTiersUseBasePricing(t *testing.T) {
+	basePricing := &LiteLLMModelPricing{
+		InputCostPerToken:       2e-6,
+		OutputCostPerToken:      10e-6,
+		CacheReadInputTokenCost: 0.1e-6,
+	}
+	svc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+		"gemini-4-argon": basePricing,
+	}}
+
+	for _, model := range []string{
+		"gemini-4-argon",
+		"gemini-4-argon-high",
+		"gemini-4-argon-low",
+		"gemini-4-argon-medium",
+		"gemini-4-argon-tiered",
+	} {
+		t.Run(model, func(t *testing.T) {
+			require.Same(t, basePricing, svc.GetModelPricing(model))
+		})
+	}
+}
+
+func TestBillingService_Gemini4ArgonThinkingTierFallbacksAreBillable(t *testing.T) {
+	svc := NewBillingService(&config.Config{}, nil)
+	tokens := UsageTokens{InputTokens: 1_000_000, OutputTokens: 1_000_000, CacheReadTokens: 1_000_000}
+
+	for _, model := range []string{
+		"gemini-4-argon",
+		"gemini-4-argon-high",
+		"gemini-4-argon-low",
+		"gemini-4-argon-medium",
+		"gemini-4-argon-tiered",
+	} {
+		t.Run(model, func(t *testing.T) {
+			cost, err := svc.CalculateCost(model, tokens, 1)
+			require.NoError(t, err)
+			require.InDelta(t, 2.0, cost.InputCost, 1e-12)
+			require.InDelta(t, 10.0, cost.OutputCost, 1e-12)
+			require.InDelta(t, 0.1, cost.CacheReadCost, 1e-12)
+			require.InDelta(t, 12.1, cost.TotalCost, 1e-12)
+		})
+	}
 }

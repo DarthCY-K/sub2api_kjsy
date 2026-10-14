@@ -170,6 +170,12 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"gemini-3.8-flash-low":    "gemini-3.8-flash-low",
 	"gemini-3.8-flash-medium": "gemini-3.8-flash-medium",
 	"gemini-3.8-flash-tiered": "gemini-3.8-flash-tiered",
+	// Gemini 4 Argon tiered models（Antigravity 目录只登记带后缀变体；裸名由 thinking 档位解析到变体）
+	"gemini-4-argon":        "gemini-4-argon",
+	"gemini-4-argon-high":   "gemini-4-argon-high",
+	"gemini-4-argon-low":    "gemini-4-argon-low",
+	"gemini-4-argon-medium": "gemini-4-argon-medium",
+	"gemini-4-argon-tiered": "gemini-4-argon-tiered",
 	// Gemini 3 image 兼容映射（向 3.1 image 迁移）
 	"gemini-3-pro-image":         "gemini-3.1-flash-image",
 	"gemini-3-pro-image-preview": "gemini-3.1-flash-image",
