@@ -83,6 +83,7 @@ var ProviderSet = wire.NewSet(
 	NewModelLeaderboardRepository, // DarthCY: 模型调用量排行榜
 	NewUsageBillingRepository,
 	NewBatchImageRepository,
+	NewGeminiCachedContentRepository,
 	NewIdempotencyRepository,
 	NewUsageCleanupRepository,
 	NewDashboardAggregationRepository,
