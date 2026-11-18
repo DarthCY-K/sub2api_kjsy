@@ -815,11 +815,6 @@ var antigravityDefaultPassthroughModels = []string{
 	"gemini-3.8-flash-low",
 	"gemini-3.8-flash-medium",
 	"gemini-3.8-flash-tiered",
-	// Gemini 4 Argon（上游映射裸名→-high，此处保证自定义 model_mapping 账号也能透传）
-	"gemini-4-argon",
-	"gemini-4-argon-high",
-	"gemini-4-argon-low",
-	"gemini-4-argon-medium",
 }
 
 // isAntigravityInjectedDefaultPassthrough 判断 GetModelMapping 中的 key→target 是否仅由
